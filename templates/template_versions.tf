@@ -69,20 +69,3 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
     }]
   }]
 }
-
-resource "coderd_template" "awshp-k8s-tasks-with-cc-jupyter" {
-  name        = "awshp-k8s-tasks-with-cc-jupyter"
-  display_name = "AWS Workshop - Kubernetes with Claude Code + Jupyter lab"
-  description = "Provision Kubernetes Deployments as Coder workspaces with Anthropic Claude Code and Jupyter lab."
-  icon = "/icon/k8s.png"
-  versions = [{
-    directory = "./awshp-k8s-tasks-with-cc-jupyter"
-    active    = true
-    # Version name is optional
-    name = var.coder_gitsha
-    tf_vars = [{
-      name  = "namespace"
-      value = "coder"
-    }]
-  }]
-}

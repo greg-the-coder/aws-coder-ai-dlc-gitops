@@ -1,12 +1,12 @@
 # AWS Coder AI-DLC GitOps
 
-Enterprise-grade AI-powered development platform on AWS using Coder, Kubernetes, and integrated AI assistants (Kiro CLI).
+Enterprise-grade AI-powered development platform on AWS using Coder, Kubernetes, and integrated AI assistants (Claude Code and Kiro CLI).
 
 ![Architecture Diagram](images/AWSCoderSingleRegionv2-0.png)
 
 ## Overview
 
-This repository provides infrastructure-as-code and Coder workspace templates for deploying a complete AI-assisted development environment on AWS. The platform combines Coder's cloud development environments with AI coding assistants, running on Amazon EKS with Amazon RDS PostgreSQL backend.  See [Deployment Instructions](#deployment-instructions) to deploy into your own AWS Account.
+This repository provides infrastructure-as-code and Coder workspace templates for deploying a complete AI-assisted development environment on AWS. The platform combines Coder's cloud development environments with AI coding assistants, running on Amazon EKS with Aurora PostgreSQL backend.  See [Deployment Instructions](#deployment-instructions) to deploy into your own AWS Account.
 
 ## Architecture
 
@@ -41,6 +41,27 @@ AI-powered development workspace with Kiro CLI integration.
 **Default Resources:**
 - CPU: 2 cores (configurable 2-8)
 - Memory: 4 GB (configurable 4-16 GB)
+- Storage: 30 GB (configurable 10-50 GB)
+
+### 2. Kubernetes with Claude Code (`awshp-k8s-base-claudecode`)
+
+Autonomous AI development workspace with Claude Code task automation.
+
+**Features:**
+- Claude Code AI assistant with task automation
+- AWS Bedrock integration (Claude Opus 4.5)
+- Kiro IDE web interface
+- code-server (VS Code in browser)
+- AWS CLI v2 and AWS CDK pre-installed
+- Node.js 20.x LTS
+- Nirmata CLI (nctl)
+- MCP server support (Pulumi, LaunchDarkly, Arize)
+- Preview server on port 3000
+- Persistent home directory storage
+
+**Default Resources:**
+- CPU: 4 cores (configurable 2-8)
+- Memory: 8 GB (configurable 4-16 GB)
 - Storage: 30 GB (configurable 10-50 GB)
 
 ## Prerequisites
@@ -301,4 +322,4 @@ See [LICENSE](LICENSE) file for details.
 
 ## Contributing
 
-This repository is designed for AWS AI-DLC Lab Events. For modifications or contributions, please follow standard GitOps practices and test changes in a non-production environment first.
+This repository is designed for AWS AI Builder Lab Events. For modifications or contributions, please follow standard GitOps practices and test changes in a non-production environment first.
