@@ -112,6 +112,52 @@ Resources:
             Status: Enabled
             ExpirationInDays: 90
 
+################## CLOUDFRONT DISTRIBUTION #################
+  CoderCloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn: CloudFrontLoggingBucket
+    Properties:
+      DistributionConfig:
+        Comment: "Coder Workshop CloudFront Distribution"
+        Enabled: true
+        PriceClass: PriceClass_100
+        Logging:
+          Bucket: !GetAtt CloudFrontLoggingBucket.DomainName
+          IncludeCookies: false
+          Prefix: "cloudfront-logs/"
+        Origins:
+          - Id: coder-alb-origin
+            DomainName: "placeholder.example.com"
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 120
+              OriginKeepaliveTimeout: 30
+        DefaultCacheBehavior:
+          TargetOriginId: coder-alb-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: true
+            Cookies:
+              Forward: all
+            Headers:
+              - "*"
+          MinTTL: 0
+          DefaultTTL: 0
+          MaxTTL: 0
+
   LoggingBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -260,80 +306,6 @@ Resources:
                   - events:List*
                   - sts:AssumeRole
                 Resource: "*"
-
-  coderLambdaExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-        - Effect: Allow
-          Principal:
-            Service:
-            - lambda.amazonaws.com
-          Action:
-          - sts:AssumeRole
-      Path: "/"
-      Policies:
-      - PolicyName:
-          Fn::Join:
-          - ''
-          - - coderLambdaPolicy-
-            - Ref: AWS::Region
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-          - Effect: Allow
-            Action:
-            - logs:CreateLogGroup
-            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
-          - Effect: Allow
-            Action:
-            - logs:CreateLogStream
-            - logs:PutLogEvents
-            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*:*"
-          - Effect: Allow
-            Action:
-            - cloudformation:DescribeStacks
-            - cloudformation:DescribeStackEvents
-            - cloudformation:DescribeStackResource
-            - cloudformation:DescribeStackResources
-            Resource: !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/*"
-          - Effect: Allow
-            Action:
-            - ec2:DescribeInstances
-            - ec2:DescribeInstanceTypeOfferings
-            - ec2:AssociateIamInstanceProfile
-            - ec2:ModifyInstanceAttribute
-            - ec2:ReplaceIamInstanceProfileAssociation
-            - ec2:DescribeIamInstanceProfileAssociations
-            - ec2:DescribeVolumes
-            - ec2:ModifyVolume
-            - ec2:DescribeVolumesModifications
-            - ec2:RebootInstances
-            Resource: "*"
-          - Effect: Allow
-            Action:
-            - iam:ListInstanceProfiles
-            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/*"
-          - Effect: Allow
-            Action:
-            - iam:PassRole
-            Resource: !GetAtt WorkshopCoderRole.Arn
-          - Effect: Allow
-            Action:
-            - ssm:DescribeInstanceInformation
-            - ssm:SendCommand
-            - ssm:GetCommandInvocation
-            - ssm:ListCommandInvocations
-            - ssm:PutParameter
-            - ssm:GetParameter
-            Resource: "*"
-          - Effect: Allow
-            Action:
-            - secretsmanager:PutSecretValue
-            - secretsmanager:UpdateSecret
-            Resource: !Ref CoderSessionTokenSecret
 
   KMSSecretsKey:
     Type: AWS::KMS::Key
@@ -720,8 +692,10 @@ Resources:
             Value: !Ref WksModelS3BucketName  
           - Name: WksModelS3Prefix
             Value: !Ref WksModelS3Prefix  
-          - Name: CODER_CF_S3_BUCKET
-            Value: !Ref CloudFrontLoggingBucket
+          - Name: CLOUDFRONT_DISTRIBUTION_ID
+            Value: !Ref CoderCloudFrontDistribution
+          - Name: CLOUDFRONT_DOMAIN
+            Value: !GetAtt CoderCloudFrontDistribution.DomainName
           
       Source:
         Type: NO_SOURCE
@@ -851,31 +825,26 @@ Resources:
                     fi
 
                     if [ -n "$CODER_LB_HOSTNAME" ]; then
-                      aws s3 cp s3://${WksModelS3BucketName}/${WksModelS3Prefix}coder-cloudfront-config.json cloudfront-config.json
-                      sed -i "s|CODER_LB_HOSTNAME_PLACEHOLDER|$CODER_LB_HOSTNAME|g" cloudfront-config.json
-                      sed -i "s|LOGGING_BUCKET_PLACEHOLDER|$CODER_CF_S3_BUCKET|g" cloudfront-config.json
+                      # Update the CloudFront distribution origin with the actual NLB hostname
+                      echo "Updating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID with origin $CODER_LB_HOSTNAME"
 
-                      if [ "$RetryFlag" != "True" ]; then
-                        # Create the CloudFront distribution
-                        CLOUDFRONT_RESULT=$(aws cloudfront create-distribution --distribution-config file://cloudfront-config.json)
-                        echo "$CLOUDFRONT_RESULT" > cloudfront-result.json
+                      # Get the current distribution config and ETag
+                      CF_CONFIG=$(aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID")
+                      ETAG=$(echo "$CF_CONFIG" | jq -r '.ETag')
+                      DIST_CONFIG=$(echo "$CF_CONFIG" | jq '.DistributionConfig')
 
-                        # Extract distribution information
-                        DISTRIBUTION_ID=$(echo "$CLOUDFRONT_RESULT" | jq -r '.Distribution.Id')
-                        CLOUDFRONT_DOMAIN=$(echo "$CLOUDFRONT_RESULT" | jq -r '.Distribution.DomainName')
-                      else
-                        # Get existing CloudFront distribution
-                        DISTRIBUTION_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?contains(Origins.Items[0].DomainName, '$CODER_LB_HOSTNAME')].Id" --output text)
-                        
-                        if [ -n "$DISTRIBUTION_ID" ]; then
-                          echo "Found existing CloudFront Distribution ID: $DISTRIBUTION_ID"
-                          CLOUDFRONT_DOMAIN=$(aws cloudfront get-distribution --id $DISTRIBUTION_ID --query 'Distribution.DomainName' --output text)
-                          echo "CloudFront Domain: $CLOUDFRONT_DOMAIN"
-                        else
-                          echo "No CloudFront distribution found for this load balancer"
-                          exit 1
-                        fi
-                      fi
+                      # Replace the placeholder origin with the actual NLB hostname
+                      UPDATED_CONFIG=$(echo "$DIST_CONFIG" | jq --arg hostname "$CODER_LB_HOSTNAME" \
+                        '.Origins.Items[0].DomainName = $hostname')
+
+                      echo "$UPDATED_CONFIG" > updated-cf-config.json
+
+                      aws cloudfront update-distribution \
+                        --id "$CLOUDFRONT_DISTRIBUTION_ID" \
+                        --distribution-config file://updated-cf-config.json \
+                        --if-match "$ETAG"
+
+                      DISTRIBUTION_ID="$CLOUDFRONT_DISTRIBUTION_ID"
 
                       echo "CloudFront Distribution ID: $DISTRIBUTION_ID"
                       echo "CloudFront Domain: $CLOUDFRONT_DOMAIN"
@@ -899,9 +868,6 @@ Resources:
 
                       echo "New Coder Access URL: $CODER_CLOUDFRONT_URL"
                       echo "New Coder Wildcard URL: $CODER_CLOUDFRONT_WILDCARD"
-
-                      # Store hostname in SSM for CloudFormation retrieval
-                      aws ssm put-parameter --name "coder-cloudfront-url" --value "$CODER_CLOUDFRONT_URL" --type "String" --overwrite
 
                       sed -i "s|https://coder.example.com|$CODER_CLOUDFRONT_URL|g" coder-core-values-v2.yaml
                       sed -i "s|\*.coder.example.com|$CODER_CLOUDFRONT_WILDCARD|g" coder-core-values-v2.yaml
@@ -1044,106 +1010,6 @@ Resources:
                     curl -X PUT -H 'Content-Type:' --data-binary '{"Status":"FAILURE","Reason":"EKS Cluster Creation Failed","UniqueId":"EKSCluster","Data":"Deployment Failed"}' "$WAIT_HANDLE_URL"
                   fi
 
-  GetCoderCloudFrontURLLambdaRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: SSMReadAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - ssm:GetParameter
-                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/coder-cloudfront-url"
-
-  GetCoderCloudFrontURLLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      Runtime: python3.12
-      Handler: index.handler
-      Role: !GetAtt GetCoderCloudFrontURLLambdaRole.Arn
-      Timeout: 60
-      Code:
-        ZipFile: |
-          import boto3
-          import json
-          import urllib.request
-          import logging
-
-          logger = logging.getLogger()
-          logger.setLevel(logging.INFO)
-
-          def handler(event, context):
-              logger.info(f'Event: {json.dumps(event)}')
-              
-              response_data = {}
-              
-              try:
-                  if event['RequestType'] == 'Delete':
-                      response_data['Status'] = 'SUCCESS'
-                  else:
-                      ssm = boto3.client('ssm')
-                      cluster_name = event['ResourceProperties']['ClusterName']
-                      
-                      try:
-                          response = ssm.get_parameter(
-                              Name=f'coder-cloudfront-url'
-                          )
-                          cfurl = response['Parameter']['Value']
-                          response_data['CoderCloudFrontURL'] = cfurl
-                          logger.info(f'Retrieved Cloud Front URL: {cfurl}')
-                      except ssm.exceptions.ParameterNotFound:
-                          logger.warning('Parameter not found, returning empty Cloud Front URL')
-                          response_data['CoderCloudFrontURL'] = ''
-                      
-                      response_data['Status'] = 'SUCCESS'
-                      
-              except Exception as e:
-                  logger.error(f'Error: {str(e)}')
-                  response_data['Status'] = 'FAILED'
-                  response_data['Reason'] = str(e)
-              
-              send_response(event, context, response_data)
-              return response_data
-
-          def send_response(event, context, response_data):
-              response_body = json.dumps({
-                  'Status': response_data['Status'],
-                  'Reason': response_data.get('Reason', 'See CloudWatch logs'),
-                  'PhysicalResourceId': context.log_stream_name,
-                  'StackId': event['StackId'],
-                  'RequestId': event['RequestId'],
-                  'LogicalResourceId': event['LogicalResourceId'],
-                  'Data': response_data
-              })
-              
-              req = urllib.request.Request(
-                  url=event['ResponseURL'],
-                  data=response_body.encode('utf-8'),
-                  headers={'content-type': '', 'content-length': str(len(response_body))},
-                  method='PUT'
-              )
-              
-              with urllib.request.urlopen(req) as response:
-                  logger.info(f'Response sent: {response.getcode()}')
-
-  CoderCloudFrontURLRetriever:
-    Type: Custom::CoderCloudFrontURL
-    DependsOn: EKSClusterWaitCondition
-    Properties:
-      ServiceToken: !GetAtt GetCoderCloudFrontURLLambda.Arn
-      ClusterName: !Ref EKSClusterName
-
   TriggerBuildLambdaIamRole:
     Type: AWS::IAM::Role
     Properties:
@@ -1280,8 +1146,16 @@ Resources:
 
 Outputs:
   CoderURL:
-    Description: Coder Cloud Front URL
-    Value: !GetAtt CoderCloudFrontURLRetriever.CoderCloudFrontURL
+    Description: Coder CloudFront URL
+    Value: !Sub 'https://${CoderCloudFrontDistribution.DomainName}'
+
+  CloudFrontDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref CoderCloudFrontDistribution
+
+  CloudFrontDomainName:
+    Description: CloudFront Distribution Domain Name
+    Value: !GetAtt CoderCloudFrontDistribution.DomainName
   
   CoderAdminEmail:
     Description: Coder Admin Email
