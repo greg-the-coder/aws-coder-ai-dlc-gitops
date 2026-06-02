@@ -944,7 +944,7 @@ Resources:
                         directoryPerms: "700"
                         uid: "1000"
                         gid: "1000"
-                      reclaimPolicy: Retain
+                      reclaimPolicy: Delete
                       volumeBindingMode: Immediate
                       EOFSC
                       echo "EFS StorageClass created"
