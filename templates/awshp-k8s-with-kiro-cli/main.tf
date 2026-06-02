@@ -18,7 +18,7 @@ terraform {
 variable "namespace" {
   type        = string
   description = "The Kubernetes namespace to create workspaces in (must exist prior to creating workspaces). If the Coder host is itself running as a Pod on the same Kubernetes cluster as you are deploying workspaces to, set this to the same namespace."
-  default     = "coder"
+  default     = "coder-ws"
 }
 
 variable "mcp_bearer_token_pulumi" {
@@ -344,7 +344,8 @@ resource "kubernetes_persistent_volume_claim" "home" {
   }
   wait_until_bound = false
   spec {
-    access_modes = ["ReadWriteOnce"]
+    access_modes = ["ReadWriteMany"]
+    storage_class_name = "efs-coder-workspaces"
     resources {
       requests = {
         storage = "${data.coder_parameter.disk_size.value}Gi"
@@ -413,7 +414,7 @@ resource "kubernetes_deployment" "dev" {
           run_as_user = 1000
           fs_group    = 1000
         }
-        service_account_name = "coder"
+        service_account_name = "default"
         container {
           name              = "dev"
           image             = "codercom/enterprise-base:ubuntu"
@@ -428,8 +429,8 @@ resource "kubernetes_deployment" "dev" {
           }
           resources {
             requests = {
-              "cpu"    = "250m"
-              "memory" = "512Mi"
+              "cpu"    = "${data.coder_parameter.cpu.value}"
+              "memory" = "${data.coder_parameter.memory.value}Gi"
             }
             limits = {
               "cpu"    = "${data.coder_parameter.cpu.value}"
@@ -451,25 +452,6 @@ resource "kubernetes_deployment" "dev" {
           }
         }
 
-        affinity {
-          // This affinity attempts to spread out all workspace pods evenly across
-          // nodes.
-          pod_anti_affinity {
-            preferred_during_scheduling_ignored_during_execution {
-              weight = 1
-              pod_affinity_term {
-                topology_key = "kubernetes.io/hostname"
-                label_selector {
-                  match_expressions {
-                    key      = "app.kubernetes.io/name"
-                    operator = "In"
-                    values   = ["coder-workspace"]
-                  }
-                }
-              }
-            }
-          }
-        }
       }
     }
   }
