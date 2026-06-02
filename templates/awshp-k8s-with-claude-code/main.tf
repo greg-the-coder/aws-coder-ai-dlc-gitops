@@ -415,7 +415,7 @@ resource "kubernetes_deployment" "dev" {
           run_as_user = 1000
           fs_group    = 1000
         }
-        service_account_name = "default"
+        service_account_name = "coder-ws"
         container {
           name              = "dev"
           image             = "codercom/enterprise-base:ubuntu"
