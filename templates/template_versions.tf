@@ -48,7 +48,7 @@ resource "coderd_template" "awshp-k8s-with-claude-code" {
     name = var.coder_gitsha
     tf_vars = [{
       name  = "namespace"
-      value = "coder"
+      value = "coder-ws"
     }]
   }]
 }
@@ -65,7 +65,7 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
     name = var.coder_gitsha
     tf_vars = [{
       name  = "namespace"
-      value = "coder"
+      value = "coder-ws"
     }]
   }]
 }
