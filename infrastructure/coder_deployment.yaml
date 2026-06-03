@@ -932,7 +932,7 @@ Resources:
                       kubectl rollout status daemonset efs-csi-node -n kube-system --timeout=120s || true
                       
                       # Create EFS StorageClass for Fargate workspaces
-                      GITOPS_RAW_URL=$(echo "$CoderGitOpsTemplateRepoURL" | sed 's|github.com|raw.githubusercontent.com|;s|\.git$||')/mvp-builder-labs-0724
+                      GITOPS_RAW_URL=$(echo "$CoderGitOpsTemplateRepoURL" | sed 's|github.com|raw.githubusercontent.com|;s|\.git$||')/main
                       curl -sL "${GITOPS_RAW_URL}/infrastructure/k8s/efs-storageclass.yaml" \
                         | sed "s|PLACEHOLDER_EFS_ID|${EfsFileSystemId}|g" \
                         | kubectl apply -f -
