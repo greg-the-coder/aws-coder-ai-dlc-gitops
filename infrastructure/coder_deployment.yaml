@@ -932,21 +932,10 @@ Resources:
                       kubectl rollout status daemonset efs-csi-node -n kube-system --timeout=120s || true
                       
                       # Create EFS StorageClass for Fargate workspaces
-                      cat <<EOFSC | kubectl apply -f -
-                      apiVersion: storage.k8s.io/v1
-                      kind: StorageClass
-                      metadata:
-                        name: efs-coder-workspaces
-                      provisioner: efs.csi.aws.com
-                      parameters:
-                        provisioningMode: efs-ap
-                        fileSystemId: ${EfsFileSystemId}
-                        directoryPerms: "700"
-                        uid: "1000"
-                        gid: "1000"
-                      reclaimPolicy: Delete
-                      volumeBindingMode: Immediate
-                      EOFSC
+                      GITOPS_RAW_URL=$(echo "$CoderGitOpsTemplateRepoURL" | sed 's|github.com|raw.githubusercontent.com|;s|\.git$||')/main
+                      curl -sL "${GITOPS_RAW_URL}/infrastructure/k8s/efs-storageclass.yaml" \
+                        | sed "s|PLACEHOLDER_EFS_ID|${EfsFileSystemId}|g" \
+                        | kubectl apply -f -
                       echo "EFS StorageClass created"
                       
                       PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
@@ -1013,15 +1002,9 @@ Resources:
                       fi
                       
                       # Create the coder-ws service account with IRSA annotation
-                      cat <<EOFSA | kubectl apply -f -
-                      apiVersion: v1
-                      kind: ServiceAccount
-                      metadata:
-                        name: coder-ws
-                        namespace: coder-ws
-                        annotations:
-                          eks.amazonaws.com/role-arn: arn:aws:iam::${ACCOUNT_ID}:role/coder-and-aws-workshop-user
-                      EOFSA
+                      curl -sL "${GITOPS_RAW_URL}/infrastructure/k8s/coder-ws-serviceaccount.yaml" \
+                        | sed "s|PLACEHOLDER_ROLE_ARN|arn:aws:iam::${ACCOUNT_ID}:role/coder-and-aws-workshop-user|g" \
+                        | kubectl apply -f -
                       echo "Created coder-ws service account with IRSA annotation"
                     fi
 
