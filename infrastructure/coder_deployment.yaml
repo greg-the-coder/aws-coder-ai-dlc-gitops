@@ -906,6 +906,10 @@ Resources:
                     helm repo add coder-v2 https://helm.coder.com/v2
                     helm repo update
 
+                    # Clone GitOps repo early for K8s manifest files
+                    git clone $CoderGitOpsTemplateRepoURL
+                    CODER_GITOPS_DIR=$(basename "$CoderGitOpsTemplateRepoURL" .git)
+
                     if [ "$RetryFlag" != "True" ]; then
                       kubectl apply -f storageclass.yaml
                       
@@ -932,9 +936,7 @@ Resources:
                       kubectl rollout status daemonset efs-csi-node -n kube-system --timeout=120s || true
                       
                       # Create EFS StorageClass for Fargate workspaces
-                      GITOPS_RAW_URL=$(echo "$CoderGitOpsTemplateRepoURL" | sed 's|github.com|raw.githubusercontent.com|;s|\.git$||')/main
-                      curl -sL "${GITOPS_RAW_URL}/infrastructure/k8s/efs-storageclass.yaml" \
-                        | sed "s|PLACEHOLDER_EFS_ID|${EfsFileSystemId}|g" \
+                      sed "s|PLACEHOLDER_EFS_ID|${EfsFileSystemId}|g" "$CODER_GITOPS_DIR/infrastructure/k8s/efs-storageclass.yaml" \
                         | kubectl apply -f -
                       echo "EFS StorageClass created"
                       
@@ -1002,8 +1004,7 @@ Resources:
                       fi
                       
                       # Create the coder-ws service account with IRSA annotation
-                      curl -sL "${GITOPS_RAW_URL}/infrastructure/k8s/coder-ws-serviceaccount.yaml" \
-                        | sed "s|PLACEHOLDER_ROLE_ARN|arn:aws:iam::${ACCOUNT_ID}:role/coder-and-aws-workshop-user|g" \
+                      sed "s|PLACEHOLDER_ROLE_ARN|arn:aws:iam::${ACCOUNT_ID}:role/coder-and-aws-workshop-user|g" "$CODER_GITOPS_DIR/infrastructure/k8s/coder-ws-serviceaccount.yaml" \
                         | kubectl apply -f -
                       echo "Created coder-ws service account with IRSA annotation"
                     fi
@@ -1104,8 +1105,6 @@ Resources:
                       fi
 
                       echo "Deploying Coder GitOps Template Repository: $CoderGitOpsTemplateRepoURL"
-                      git clone $CoderGitOpsTemplateRepoURL
-                      CODER_GITOPS_DIR=$(basename "$CoderGitOpsTemplateRepoURL" .git)
                       CODER_AGENT_URL="$CODER_CLOUDFRONT_URL"; export CODER_AGENT_URL
                       cd $CODER_GITOPS_DIR/templates 
 
