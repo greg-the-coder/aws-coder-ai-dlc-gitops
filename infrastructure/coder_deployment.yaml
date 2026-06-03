@@ -932,7 +932,8 @@ Resources:
                       kubectl rollout status daemonset efs-csi-node -n kube-system --timeout=120s || true
                       
                       # Create EFS StorageClass for Fargate workspaces
-                      curl -sL "https://raw.githubusercontent.com/greg-the-coder/aws-coder-ai-dlc-gitops/mvp-builder-labs-0724/infrastructure/k8s/efs-storageclass.yaml" \
+                      GITOPS_RAW_URL=$(echo "$CoderGitOpsTemplateRepoURL" | sed 's|github.com|raw.githubusercontent.com|;s|\.git$||')/mvp-builder-labs-0724
+                      curl -sL "${GITOPS_RAW_URL}/infrastructure/k8s/efs-storageclass.yaml" \
                         | sed "s|PLACEHOLDER_EFS_ID|${EfsFileSystemId}|g" \
                         | kubectl apply -f -
                       echo "EFS StorageClass created"
@@ -1001,7 +1002,7 @@ Resources:
                       fi
                       
                       # Create the coder-ws service account with IRSA annotation
-                      curl -sL "https://raw.githubusercontent.com/greg-the-coder/aws-coder-ai-dlc-gitops/mvp-builder-labs-0724/infrastructure/k8s/coder-ws-serviceaccount.yaml" \
+                      curl -sL "${GITOPS_RAW_URL}/infrastructure/k8s/coder-ws-serviceaccount.yaml" \
                         | sed "s|PLACEHOLDER_ROLE_ARN|arn:aws:iam::${ACCOUNT_ID}:role/coder-and-aws-workshop-user|g" \
                         | kubectl apply -f -
                       echo "Created coder-ws service account with IRSA annotation"
