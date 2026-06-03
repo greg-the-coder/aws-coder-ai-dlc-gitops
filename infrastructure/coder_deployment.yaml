@@ -932,21 +932,21 @@ Resources:
                       kubectl rollout status daemonset efs-csi-node -n kube-system --timeout=120s || true
                       
                       # Create EFS StorageClass for Fargate workspaces
-                      cat <<EOFSC | kubectl apply -f -
-                      apiVersion: storage.k8s.io/v1
-                      kind: StorageClass
-                      metadata:
-                        name: efs-coder-workspaces
-                      provisioner: efs.csi.aws.com
-                      parameters:
-                        provisioningMode: efs-ap
-                        fileSystemId: ${EfsFileSystemId}
-                        directoryPerms: "700"
-                        uid: "1000"
-                        gid: "1000"
-                      reclaimPolicy: Delete
-                      volumeBindingMode: Immediate
-                      EOFSC
+                      kubectl apply -f - <<EOFSC
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: efs-coder-workspaces
+provisioner: efs.csi.aws.com
+parameters:
+  provisioningMode: efs-ap
+  fileSystemId: ${EfsFileSystemId}
+  directoryPerms: "700"
+  uid: "1000"
+  gid: "1000"
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+EOFSC
                       echo "EFS StorageClass created"
                       
                       PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
@@ -1013,15 +1013,15 @@ Resources:
                       fi
                       
                       # Create the coder-ws service account with IRSA annotation
-                      cat <<EOFSA | kubectl apply -f -
-                      apiVersion: v1
-                      kind: ServiceAccount
-                      metadata:
-                        name: coder-ws
-                        namespace: coder-ws
-                        annotations:
-                          eks.amazonaws.com/role-arn: arn:aws:iam::${ACCOUNT_ID}:role/coder-and-aws-workshop-user
-                      EOFSA
+                      kubectl apply -f - <<EOFSA
+  apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    name: coder-ws
+    namespace: coder-ws
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::${ACCOUNT_ID}:role/coder-and-aws-workshop-user
+EOFSA
                       echo "Created coder-ws service account with IRSA annotation"
                     fi
 
