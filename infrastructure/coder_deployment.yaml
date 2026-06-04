@@ -303,6 +303,7 @@ Resources:
                   - logs:*
                   - kms:*
                   - cloudformation:*
+                  - ecr:*
                   - events:Describe*
                   - events:List*
                   - sts:AssumeRole
@@ -718,6 +719,38 @@ Resources:
       DBClusterIdentifier: !Ref CoderAuroraCluster
       PubliclyAccessible: false
 
+################## ECR Repository for Workspace Image #####################
+
+  WorkspaceImageRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${EKSClusterName}/coder-workspace'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only last 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub '${EKSClusterName}-coder-workspace'
+
 ################## EKS Bootstrap #####################
 
   BuildProject:
@@ -738,6 +771,7 @@ Resources:
         Type: LINUX_CONTAINER
         ComputeType: BUILD_GENERAL1_SMALL
         Image: public.ecr.aws/v1u7c9b4/coder-codebuild:latest
+        PrivilegedMode: true
         EnvironmentVariables:
           - Name: WAIT_HANDLE_URL
             Value: !Ref EKSClusterWaitHandle
@@ -807,6 +841,8 @@ Resources:
             Value: !GetAtt FargatePodExecutionRole.Arn
           - Name: EfsFileSystemId
             Value: !Ref EfsFileSystem
+          - Name: WorkspaceImageUri
+            Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace'
           
       Source:
         Type: NO_SOURCE
@@ -909,6 +945,13 @@ Resources:
                     # Clone GitOps repo early for K8s manifest files
                     git clone $CoderGitOpsTemplateRepoURL
                     CODER_GITOPS_DIR=$(basename "$CoderGitOpsTemplateRepoURL" .git)
+
+                    # Build and push workspace image to ECR
+                    echo "Building workspace image..."
+                    aws ecr get-login-password --region ${AWSRegion} | docker login --username AWS --password-stdin ${WorkspaceImageUri%%/*}
+                    docker build -t ${WorkspaceImageUri}:latest "$CODER_GITOPS_DIR/images/coder-workspace/"
+                    docker push ${WorkspaceImageUri}:latest
+                    echo "Workspace image pushed to ${WorkspaceImageUri}:latest"
 
                     if [ "$RetryFlag" != "True" ]; then
                       kubectl apply -f storageclass.yaml
@@ -1353,3 +1396,7 @@ Outputs:
   EfsFileSystemId:
     Description: EFS File System ID for workspace persistent storage
     Value: !Ref EfsFileSystem
+
+  WorkspaceImageUri:
+    Description: ECR image URI for Coder workspace pods
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace'

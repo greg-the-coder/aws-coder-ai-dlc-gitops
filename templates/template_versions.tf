@@ -26,6 +26,11 @@ variable "coder_gitsha" {
   description = "Git SHA to use in version name"
   default = ""  
 }
+variable "workspace_image" {
+  type        = string
+  description = "ECR image URI for workspace pods"
+  default     = ""
+}
 
 provider "coderd" {
     url   = "${var.coder_url}"
@@ -49,6 +54,10 @@ resource "coderd_template" "awshp-k8s-with-claude-code" {
     tf_vars = [{
       name  = "namespace"
       value = "coder-ws"
+    },
+    {
+      name  = "workspace_image"
+      value = var.workspace_image
     }]
   }]
 }
@@ -66,6 +75,10 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
     tf_vars = [{
       name  = "namespace"
       value = "coder-ws"
+    },
+    {
+      name  = "workspace_image"
+      value = var.workspace_image
     }]
   }]
 }

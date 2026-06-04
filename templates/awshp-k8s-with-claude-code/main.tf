@@ -21,6 +21,12 @@ variable "namespace" {
   default     = "coder-ws"
 }
 
+variable "workspace_image" {
+  type        = string
+  description = "Container image for workspace pods"
+  default     = "codercom/enterprise-base:ubuntu"
+}
+
 variable "anthropic_model" {
   type        = string
   description = "The AWS Inference profile ID of the base Anthropic model to use with Claude Code"
@@ -344,7 +350,7 @@ resource "kubernetes_deployment" "dev" {
         service_account_name = "coder-ws"
         container {
           name              = "dev"
-          image             = "public.ecr.aws/coder-aws/coder-workspace:latest"
+          image             = var.workspace_image
           image_pull_policy = "Always"
           command           = ["sh", "-c", coder_agent.dev.init_script]
           security_context {

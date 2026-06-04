@@ -21,6 +21,12 @@ variable "namespace" {
   default     = "coder-ws"
 }
 
+variable "workspace_image" {
+  type        = string
+  description = "Container image for workspace pods"
+  default     = "codercom/enterprise-base:ubuntu"
+}
+
 variable "mcp_bearer_token_pulumi" {
   type        = string
   description = "Your Pulumi MCP bearer token. This provides access to Pulumi MCP Server via Kiro CLI."
@@ -315,7 +321,7 @@ resource "kubernetes_deployment" "dev" {
         service_account_name = "coder-ws"
         container {
           name              = "dev"
-          image             = "public.ecr.aws/coder-aws/coder-workspace:latest"
+          image             = var.workspace_image
           image_pull_policy = "Always"
           command           = ["sh", "-c", coder_agent.dev.init_script]
           security_context {
