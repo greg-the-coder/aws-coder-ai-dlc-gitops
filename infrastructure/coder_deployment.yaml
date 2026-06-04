@@ -967,41 +967,12 @@ Resources:
                       # Setup IRSA for coder-ws namespace (Pod Identity doesn't work on Fargate)
                       echo "Configuring IRSA for Fargate workspace pods..."
                       
-                      # Get the OIDC issuer URL from the cluster
-                      OIDC_ISSUER=$(aws eks describe-cluster --name ${EKSClusterName} --query "cluster.identity.oidc.issuer" --output text)
-                      OIDC_PROVIDER=$(echo "$OIDC_ISSUER" | sed 's|https://||')
-                      
-                      # Get the OIDC provider ARN
-                      OIDC_PROVIDER_ARN=$(aws iam list-open-id-connect-providers --query "OpenIDConnectProviderList[?ends_with(Arn, '${OIDC_PROVIDER}')].Arn" --output text)
-                      
-                      if [ -z "$OIDC_PROVIDER_ARN" ]; then
-                        echo "ERROR: OIDC provider not found. IRSA will not work."
-                      else
-                        echo "OIDC Provider ARN: $OIDC_PROVIDER_ARN"
-                        
-                        # Update the WorkshopCoderRole trust policy to allow IRSA from coder-ws/coder-ws SA
-                        CURRENT_TRUST=$(aws iam get-role --role-name coder-and-aws-workshop-user --query 'Role.AssumeRolePolicyDocument' --output json)
-                        
-                        NEW_TRUST=$(echo "$CURRENT_TRUST" | jq --arg oidc_arn "$OIDC_PROVIDER_ARN" --arg oidc_provider "$OIDC_PROVIDER" '{
-                          Version: .Version,
-                          Statement: .Statement + [{
-                            Effect: "Allow",
-                            Principal: { Federated: $oidc_arn },
-                            Action: "sts:AssumeRoleWithWebIdentity",
-                            Condition: {
-                              StringEquals: {
-                                ($oidc_provider + ":aud"): "sts.amazonaws.com",
-                                ($oidc_provider + ":sub"): "system:serviceaccount:coder-ws:coder-ws"
-                              }
-                            }
-                          }]
-                        }')
-                        
-                        aws iam update-assume-role-policy \
-                          --role-name coder-and-aws-workshop-user \
-                          --policy-document "$NEW_TRUST"
-                        echo "Updated IAM role trust policy for IRSA"
-                      fi
+                      chmod +x "$CODER_GITOPS_DIR/infrastructure/scripts/irsa-trust-policy-update.sh"
+                      "$CODER_GITOPS_DIR/infrastructure/scripts/irsa-trust-policy-update.sh" \
+                        "${EKSClusterName}" \
+                        "coder-and-aws-workshop-user" \
+                        "coder-ws" \
+                        "coder-ws"
                       
                       # Create the coder-ws service account with IRSA annotation
                       sed "s|PLACEHOLDER_ROLE_ARN|arn:aws:iam::${ACCOUNT_ID}:role/coder-and-aws-workshop-user|g" "$CODER_GITOPS_DIR/infrastructure/k8s/coder-ws-serviceaccount.yaml" \
