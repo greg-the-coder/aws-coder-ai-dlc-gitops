@@ -918,6 +918,9 @@ Resources:
                       
                       kubectl create namespace coder-ws
                       
+                      # Grant coder SA in coder namespace permissions to manage resources in coder-ws
+                      kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/coder-workspace-rbac.yaml"
+                      
                       aws eks create-fargate-profile \
                         --cluster-name ${EKSClusterName} \
                         --fargate-profile-name coder-workspaces \
