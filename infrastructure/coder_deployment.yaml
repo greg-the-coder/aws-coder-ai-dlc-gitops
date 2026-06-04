@@ -959,7 +959,7 @@ Resources:
 
                     if [ "$RetryFlag" != "True" ]; then
                       aws eks create-pod-identity-association \
-                      --cluster-name coder-aws-cluster \
+                      --cluster-name ${EKSClusterName} \
                       --namespace coder \
                       --service-account coder \
                       --role-arn arn:aws:iam::$ACCOUNT_ID:role/coder-and-aws-workshop-user
