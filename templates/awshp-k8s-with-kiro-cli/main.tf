@@ -110,119 +110,17 @@ resource "coder_agent" "dev" {
     }
     startup_script = <<-EOT
     set -e
-    
+
     # Create persistent bin directory
     mkdir -p $HOME/bin
     mkdir -p $HOME/.local/bin
-    
+
     # Update PATH for current session
     export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$PATH"
-    
-    sudo apt update
-    sudo apt install -y curl unzip gnupg dirmngr
 
-    # install AWS CLI to persistent location
-    if ! command -v aws &> /dev/null; then
-      echo "Installing AWS CLI..."
-      cd $HOME
-      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-      unzip -q awscliv2.zip
-      
-      # Install to home directory instead of system-wide
-      ./aws/install --install-dir $HOME/.local/aws-cli --bin-dir $HOME/.local/bin
-      
-      # Verify installation
-      aws --version
-      
-      # Cleanup
-      rm -rf aws awscliv2.zip
-      
-      echo "AWS CLI installation completed"
-    else
-      echo "AWS CLI is already installed"
-      aws --version
-    fi
-
-    # install Node.js and npm (required for CDK, LaunchDarkly MCP, and Kiro CLI)
-    if ! command -v node &> /dev/null; then
-      echo "Installing Node.js..."
-      # Add NodeSource repository for the latest LTS version
-      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-      sudo apt-get install nodejs -y
-      
-      # Verify installation
-      node -v
-      npm -v
-      
-      echo "Node.js installation completed"
-    else
-      echo "Node.js is already installed"
-      node -v
-    fi
-
-    # install AWS CDK to persistent location
-    if ! command -v cdk &> /dev/null; then
-      echo "Installing AWS CDK..."
-      
-      # Configure npm to use home directory for global packages
-      mkdir -p $HOME/.npm-global
-      npm config set prefix "$HOME/.npm-global"
-      
-      # Install AWS CDK to home directory
-      npm install -g aws-cdk
-      
-      # Create symlink in bin directory
-      ln -sf $HOME/.npm-global/bin/cdk $HOME/.local/bin/cdk
-      
-      # Verify CDK installation
-      cdk --version
-      
-      echo "AWS CDK installation completed"
-    else
-      echo "AWS CDK is already installed"
-      cdk --version
-    fi
-
-    # install Kiro CLI to persistent location
-    if ! command -v kiro-cli &> /dev/null; then
-      echo "Installing Kiro CLI..."
-      curl -fsSL https://cli.kiro.dev/install | bash
-      
-      # Verify Kiro CLI installation
-      kiro-cli version
-      
-      echo "Kiro CLI installation completed"
-    else
-      echo "Kiro CLI is already installed"
-      kiro-cli version
-    fi
-
-    # Install uv (Python package manager) which includes uvx for MCP servers
-    if [ ! -f "$HOME/.local/bin/uv" ]; then
-      echo "Installing uv/uvx..."
-      UV_UNMANAGED_INSTALL="$HOME/.local/bin" curl -LsSf https://astral.sh/uv/install.sh | sh
-      echo "uv/uvx installation completed"
-    else
-      echo "uv/uvx is already installed"
-    fi
-
-    # Install Nirmata CLI
-    if ! command -v nctl &> /dev/null; then
-      export NCTL_VERSION=4.10.7-rc.6
-      curl -LO https://dl.nirmata.io/nctl/nctl_$NCTL_VERSION/nctl_$NCTL_VERSION\_linux_amd64.zip
-      curl -LO https://dl.nirmata.io/nctl/nctl_$NCTL_VERSION/nctl_$NCTL_VERSION\_linux_amd64.zip.asc
-      export GNUPGHOME="$(mktemp -d)"
-      gpg --keyserver keys.openpgp.org --recv-key 7CEE8D12BCFE419B55A5D66A4F71AE57094A908B
-      gpg --batch --verify nctl_$NCTL_VERSION\_linux_amd64.zip.asc nctl_$NCTL_VERSION\_linux_amd64.zip
-      unzip -o nctl_$NCTL_VERSION\_linux_amd64.zip
-      chmod u+x nctl
-      sudo mv nctl $HOME/.local/bin/nctl
-      nctl version
-    fi
-    
     # Configure Kiro CLI MCP servers
     echo "Configuring Kiro CLI MCP servers..."
-    
+
     # Create user-level MCP configuration
     mkdir -p $HOME/.kiro/settings
     cat > $HOME/.kiro/settings/mcp.json <<MCP_EOF
@@ -255,13 +153,13 @@ resource "coder_agent" "dev" {
   }
 }
 MCP_EOF
-    
+
     echo "Kiro CLI MCP configuration completed (user-level)"
-    
+
     # Configure workspace trust settings for Kiro IDE
     echo "Configuring Kiro IDE workspace trust..."
     mkdir -p $HOME/.local/share/code-server/User
-    
+
     # Create or update settings.json to trust the home folder
     cat > $HOME/.local/share/code-server/User/settings.json <<'SETTINGS_EOF'
 {
@@ -271,7 +169,7 @@ MCP_EOF
   "security.workspace.trust.untrustedFiles": "open"
 }
 SETTINGS_EOF
-    
+
     # Add trusted folders configuration
     mkdir -p $HOME/.kiro/settings
     cat > $HOME/.kiro/settings/trusted-workspaces.json <<'TRUST_EOF'
@@ -281,11 +179,11 @@ SETTINGS_EOF
   ]
 }
 TRUST_EOF
-    
+
     echo "Kiro IDE workspace trust configuration completed"
-    
+
     #Symlink Coder Agent
-    ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder" 
+    ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder"
 
     EOT
 
@@ -417,11 +315,12 @@ resource "kubernetes_deployment" "dev" {
         service_account_name = "coder-ws"
         container {
           name              = "dev"
-          image             = "codercom/enterprise-base:ubuntu"
+          image             = "public.ecr.aws/coder-aws/coder-workspace:latest"
           image_pull_policy = "Always"
           command           = ["sh", "-c", coder_agent.dev.init_script]
           security_context {
-            run_as_user = "1000"
+            run_as_user                = "1000"
+            allow_privilege_escalation = false
           }
           env {
             name  = "CODER_AGENT_TOKEN"

@@ -199,97 +199,23 @@ module "claude-code" {
   # permission_mode     = "bypassPermissions"
         
     pre_install_script = <<-EOF
-    set -e    
-    
-    sudo apt update
-    sudo apt install -y curl unzip gnupg dirmngr jq
-    
-    # Move cross module/workspace requirements into single place to avoid race conditions
-    
+    set -e
+
     # Create persistent bin directory
     mkdir -p $HOME/bin
     mkdir -p $HOME/.local/bin
-    
+
     # Update PATH for current session
-    export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
-
-    # install Node.js and npm (required for CDK)
-    if ! command -v node &> /dev/null; then
-      echo "Installing Node.js..."
-      # Add NodeSource repository for the latest LTS version
-      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-      sudo apt-get install nodejs -y
-      
-      # Verify installation
-      node -v
-      npm -v
-      
-      echo "Node.js installation completed"
-    else
-      echo "Node.js is already installed"
-      node -v
-    fi
-
-    # install AWS CLI to persistent location
-    if ! command -v aws &> /dev/null; then
-      echo "Installing AWS CLI..."
-      cd $HOME
-      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-      unzip -q awscliv2.zip
-      
-      # Install to home directory instead of system-wide
-      ./aws/install --install-dir $HOME/.local/aws-cli --bin-dir $HOME/.local/bin
-      
-      # Verify installation
-      aws --version
-      
-      # Cleanup
-      rm -rf aws awscliv2.zip
-      
-      echo "AWS CLI installation completed"
-    else
-      echo "AWS CLI is already installed"
-      aws --version
-    fi
-
-    # install AWS CDK to persistent location
-    if ! command -v cdk &> /dev/null; then
-      echo "Installing AWS CDK..."
-      
-      # Configure npm to use home directory for global packages
-      mkdir -p $HOME/.npm-global
-      npm config set prefix "$HOME/.npm-global"
-      
-      # Install AWS CDK to home directory
-      npm install -g aws-cdk
-      
-      # Create symlink in bin directory
-      ln -sf $HOME/.npm-global/bin/cdk $HOME/.local/bin/cdk
-      
-      # Verify CDK installation
-      cdk --version
-      
-      echo "AWS CDK installation completed"
-    else
-      echo "AWS CDK is already installed"
-      cdk --version
-    fi
+    export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$PATH"
 
     #Symlink Coder Agent
-    ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder" 
+    ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder"
 
     EOF
 
     post_install_script = <<-EOF
 
-# Install uv (Python package manager) which includes uvx         
-if [ ! -f "$HOME/.local/bin/uv" ]; then                          
-  UV_UNMANAGED_INSTALL="$HOME/.local/bin" curl -LsSf https://astral.sh/uv/install.sh | sh                             
-fi   
-
 # Bypass the dangerously-skip-permissions TOS prompt
-# Required due to Claude Code bug: the --dangerously-skip-permissions flag alone
-# does not suppress the interactive dialog; settings.json must also be set.
 mkdir -p "$HOME/.claude"
 if [ -f "$HOME/.claude/settings.json" ]; then
   tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true}' "$HOME/.claude/settings.json" > "$tmp" && mv "$tmp" "$HOME/.claude/settings.json" || true
@@ -418,11 +344,12 @@ resource "kubernetes_deployment" "dev" {
         service_account_name = "coder-ws"
         container {
           name              = "dev"
-          image             = "codercom/enterprise-base:ubuntu"
+          image             = "public.ecr.aws/coder-aws/coder-workspace:latest"
           image_pull_policy = "Always"
           command           = ["sh", "-c", coder_agent.dev.init_script]
           security_context {
-            run_as_user = "1000"
+            run_as_user                = "1000"
+            allow_privilege_escalation = false
           }
           env {
             name  = "CODER_AGENT_TOKEN"
