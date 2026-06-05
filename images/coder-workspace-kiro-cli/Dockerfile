@@ -41,7 +41,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL=/usr/local
 # Kiro CLI
 RUN curl -fsSL https://cli.kiro.dev/install | bash \
     && cp /root/.local/bin/kiro-cli /usr/local/bin/kiro-cli \
-    && chmod +x /usr/local/bin/kiro-cli
+    && cp /root/.local/bin/kiro-cli-chat /usr/local/bin/kiro-cli-chat \
+    && chmod +x /usr/local/bin/kiro-cli /usr/local/bin/kiro-cli-chat
 
 # Nirmata CLI (nctl)
 ARG NCTL_VERSION=4.10.7-rc.6
