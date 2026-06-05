@@ -2,7 +2,7 @@ FROM codercom/enterprise-base:ubuntu
 
 USER root
 
-# System packages (eliminates need for sudo apt at runtime)
+# System packages
 RUN apt-get update && apt-get install -y \
     curl \
     unzip \
@@ -19,13 +19,13 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# AWS CLI
+# AWS CLI v2
 RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip \
     && unzip -q /tmp/awscliv2.zip -d /tmp \
     && /tmp/aws/install \
     && rm -rf /tmp/aws /tmp/awscliv2.zip
 
-# AWS CDK (global)
+# AWS CDK
 RUN npm install -g aws-cdk
 
 # uv (Python package manager / uvx for MCP servers)
@@ -48,7 +48,7 @@ RUN chown -R coder:coder /home/coder
 USER coder
 WORKDIR /home/coder
 
-# Pre-configure npm global directory for user-level installs at runtime
+# Pre-configure npm global directory
 RUN mkdir -p /home/coder/.npm-global \
     && npm config set prefix "/home/coder/.npm-global"
 
