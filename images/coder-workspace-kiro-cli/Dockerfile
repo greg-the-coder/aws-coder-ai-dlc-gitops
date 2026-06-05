@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     bash \
     openssh-client \
+    libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 20 LTS
