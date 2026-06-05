@@ -859,6 +859,8 @@ Resources:
                     - name: aws-ebs-csi-driver
                       version: latest
                     - name: aws-efs-csi-driver
+                      version: latest
+                    - name: coredns
                       version: latest  
                       
                   cloudWatch:
