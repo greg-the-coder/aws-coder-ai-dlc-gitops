@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM public.ecr.aws/docker/library/ubuntu:22.04
 
 # Avoid interactive prompts during package install
 ENV DEBIAN_FRONTEND=noninteractive
@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     bash \
     openssh-client \
+    libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 20 LTS
@@ -54,6 +55,12 @@ RUN curl -LO "https://dl.nirmata.io/nctl/nctl_${NCTL_VERSION}/nctl_${NCTL_VERSIO
 
 # Ensure coder user owns their home directory
 RUN chown -R coder:coder /home/coder
+
+# Make /usr/local/bin writable by coder user (Coder modules use sudo mv to install binaries there)
+RUN chmod 777 /usr/local/bin
+
+# Install a no-op sudo wrapper (Coder modules expect sudo to exist for `sudo mv`)
+RUN printf '#!/bin/sh\nexec "$@"\n' > /usr/bin/sudo && chmod +x /usr/bin/sudo
 
 USER coder
 WORKDIR /home/coder
