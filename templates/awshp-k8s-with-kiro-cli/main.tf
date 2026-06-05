@@ -256,7 +256,7 @@ resource "kubernetes_persistent_volume" "home" {
     }
     access_modes                     = ["ReadWriteMany"]
     persistent_volume_reclaim_policy = "Retain"
-    storage_class_name               = ""
+    storage_class_name               = "efs-static"
     volume_mode                      = "Filesystem"
     persistent_volume_source {
       csi {
@@ -275,7 +275,7 @@ resource "kubernetes_persistent_volume_claim" "home" {
   wait_until_bound = false
   spec {
     access_modes       = ["ReadWriteMany"]
-    storage_class_name = ""
+    storage_class_name = "efs-static"
     volume_name        = kubernetes_persistent_volume.home.metadata.0.name
     resources {
       requests = {
