@@ -32,7 +32,9 @@ RUN npm install -g aws-cdk
 RUN curl -LsSf https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL=/usr/local/bin sh
 
 # Kiro CLI
-RUN curl -fsSL https://cli.kiro.dev/install | KIRO_INSTALL_DIR=/usr/local/bin bash
+RUN curl -fsSL https://cli.kiro.dev/install | bash \
+    && cp /root/.local/bin/kiro-cli /usr/local/bin/kiro-cli \
+    && chmod +x /usr/local/bin/kiro-cli
 
 # Nirmata CLI (nctl)
 ARG NCTL_VERSION=4.10.7-rc.6
