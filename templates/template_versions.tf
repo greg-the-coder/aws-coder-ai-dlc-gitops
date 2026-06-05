@@ -44,6 +44,12 @@ variable "kiro_cli_image" {
   default     = ""
 }
 
+variable "efs_file_system_id" {
+  type        = string
+  description = "EFS file system ID for persistent workspace storage"
+  default     = ""
+}
+
 provider "coderd" {
     url   = "${var.coder_url}"
     token = "${var.coder_token}"
@@ -70,6 +76,10 @@ resource "coderd_template" "awshp-k8s-with-claude-code" {
     {
       name  = "workspace_image"
       value = var.claude_code_image
+    },
+    {
+      name  = "efs_file_system_id"
+      value = var.efs_file_system_id
     }]
   }]
 }
@@ -91,6 +101,10 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
     {
       name  = "workspace_image"
       value = var.kiro_cli_image
+    },
+    {
+      name  = "efs_file_system_id"
+      value = var.efs_file_system_id
     }]
   }]
 }

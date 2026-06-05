@@ -1,6 +1,10 @@
-FROM codercom/enterprise-base:ubuntu
+FROM ubuntu:22.04
 
-USER root
+# Avoid interactive prompts during package install
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Create coder user (uid 1000) to match Fargate security context
+RUN useradd -m -s /bin/bash -u 1000 coder
 
 # System packages
 RUN apt-get update && apt-get install -y \
@@ -10,8 +14,11 @@ RUN apt-get update && apt-get install -y \
     dirmngr \
     jq \
     git \
+    ca-certificates \
     python3 \
     python3-pip \
+    bash \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 20 LTS
@@ -32,7 +39,10 @@ RUN npm install -g aws-cdk
 RUN curl -LsSf https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL=/usr/local/bin sh
 
 # Kiro CLI
-RUN curl -fsSL https://cli.kiro.dev/install | KIRO_INSTALL_DIR=/usr/local/bin bash
+RUN curl -fsSL https://cli.kiro.dev/install | bash \
+    && cp /root/.local/bin/kiro-cli /usr/local/bin/kiro-cli \
+    && cp /root/.local/bin/kiro-cli-chat /usr/local/bin/kiro-cli-chat \
+    && chmod +x /usr/local/bin/kiro-cli /usr/local/bin/kiro-cli-chat
 
 # Nirmata CLI (nctl)
 ARG NCTL_VERSION=4.10.7-rc.6

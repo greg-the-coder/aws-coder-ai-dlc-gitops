@@ -167,9 +167,19 @@ Resources:
             build:
               commands:
                 - echo "Building Claude Code workspace image..."
-                - docker build -t $CLAUDE_CODE_REPO_URI:latest -t $CLAUDE_CODE_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-claude-code/
+                - |
+                  for i in 1 2 3; do
+                    docker build -t $CLAUDE_CODE_REPO_URI:latest -t $CLAUDE_CODE_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-claude-code/ && break
+                    echo "Build attempt $i failed, waiting 60s before retry..."
+                    sleep 60
+                  done
                 - echo "Building Kiro CLI workspace image..."
-                - docker build -t $KIRO_CLI_REPO_URI:latest -t $KIRO_CLI_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-kiro-cli/
+                - |
+                  for i in 1 2 3; do
+                    docker build -t $KIRO_CLI_REPO_URI:latest -t $KIRO_CLI_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-kiro-cli/ && break
+                    echo "Build attempt $i failed, waiting 60s before retry..."
+                    sleep 60
+                  done
             post_build:
               commands:
                 - echo "Pushing Claude Code workspace image..."
@@ -207,7 +217,7 @@ Resources:
                 Action:
                   - codebuild:StartBuild
                   - codebuild:BatchGetBuilds
-                Resource: !GetAtt ImageBuildProject.Arn
+                Resource: !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/*'
 
   TriggerBuildLambda:
     Type: AWS::Lambda::Function

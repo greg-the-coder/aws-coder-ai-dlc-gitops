@@ -304,6 +304,7 @@ Resources:
                   - kms:*
                   - cloudformation:*
                   - ecr:*
+                  - elasticfilesystem:*
                   - events:Describe*
                   - events:List*
                   - sts:AssumeRole
@@ -858,6 +859,8 @@ Resources:
                     - name: aws-ebs-csi-driver
                       version: latest
                     - name: aws-efs-csi-driver
+                      version: latest
+                    - name: coredns
                       version: latest  
                       
                   cloudWatch:
@@ -925,6 +928,7 @@ Resources:
                       
                       # Grant coder SA in coder namespace permissions to manage resources in coder-ws
                       kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/coder-workspace-rbac.yaml"
+                      kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/efs-storageclass.yaml"
                       
                       aws eks create-fargate-profile \
                         --cluster-name ${EKSClusterName} \
@@ -939,15 +943,6 @@ Resources:
                         --fargate-profile-name coder-workspaces
                       echo "Fargate profile is ACTIVE"
 
-                      # EFS CSI Driver installed as EKS managed addon
-                      # Wait for EFS CSI driver to be ready
-                      kubectl rollout status daemonset efs-csi-node -n kube-system --timeout=120s || true
-                      
-                      # Create EFS StorageClass for Fargate workspaces
-                      sed "s|PLACEHOLDER_EFS_ID|${EfsFileSystemId}|g" "$CODER_GITOPS_DIR/infrastructure/k8s/efs-storageclass.yaml" \
-                        | kubectl apply -f -
-                      echo "EFS StorageClass created"
-                      
                       PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
                       kubectl create secret generic coder-db-url -n coder --from-literal=url="$PostgreSQLConnectionURL"
                  

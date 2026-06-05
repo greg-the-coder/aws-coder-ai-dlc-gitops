@@ -1,13 +1,6 @@
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: efs-coder-workspaces
+  name: efs-static
 provisioner: efs.csi.aws.com
-parameters:
-  provisioningMode: efs-ap
-  fileSystemId: PLACEHOLDER_EFS_ID
-  directoryPerms: "700"
-  uid: "1000"
-  gid: "1000"
-reclaimPolicy: Delete
 volumeBindingMode: Immediate

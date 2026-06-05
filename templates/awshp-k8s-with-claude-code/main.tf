@@ -12,6 +12,10 @@ terraform {
             source = "hashicorp/random"
             version = "3.7.2"
         }
+        aws = {
+            source = "hashicorp/aws"
+            version = ">= 5.0"
+        }
     }
 }
 
@@ -25,6 +29,12 @@ variable "workspace_image" {
   type        = string
   description = "Container image for workspace pods"
   default     = "codercom/enterprise-base:ubuntu"
+}
+
+variable "efs_file_system_id" {
+  type        = string
+  description = "EFS file system ID for persistent workspace storage"
+  default     = ""
 }
 
 variable "anthropic_model" {
@@ -120,21 +130,6 @@ data "coder_parameter" "memory" {
   order     = 2
 }
 
-data "coder_parameter" "disk_size" {
-  name        = "PVC storage size"
-  type        = "number"
-  description = "Number of GB of storage for '${local.home_dir}'! This will persist after the workspace's K8s Pod is shutdown or deleted."
-  icon        = "https://www.pngall.com/wp-content/uploads/5/Database-Storage-PNG-Clipart.png"
-  validation {
-    min       = 10
-    max       = 50
-    monotonic = "increasing"
-  }
-  form_type = "slider"
-  mutable   = true
-  default   = 30
-  order     = 3
-}
 
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
@@ -256,32 +251,64 @@ resource "coder_app" "preview" {
     }
 }
 
+
+resource "aws_efs_access_point" "home" {
+  file_system_id = var.efs_file_system_id
+
+  posix_user {
+    uid = 1000
+    gid = 1000
+  }
+
+  root_directory {
+    path = "/workspaces/${data.coder_workspace.me.id}"
+    creation_info {
+      owner_uid   = 1000
+      owner_gid   = 1000
+      permissions = "0755"
+    }
+  }
+
+  tags = {
+    Name = "coder-${data.coder_workspace.me.name}-home"
+    "com.coder.workspace.id" = data.coder_workspace.me.id
+  }
+}
+
+resource "kubernetes_persistent_volume" "home" {
+  metadata {
+    name = "coder-${data.coder_workspace.me.id}-home"
+  }
+  spec {
+    capacity = {
+      storage = "50Gi"
+    }
+    access_modes                     = ["ReadWriteMany"]
+    persistent_volume_reclaim_policy = "Retain"
+    storage_class_name               = "efs-static"
+    volume_mode                      = "Filesystem"
+    persistent_volume_source {
+      csi {
+        driver        = "efs.csi.aws.com"
+        volume_handle = "${var.efs_file_system_id}::${aws_efs_access_point.home.id}"
+      }
+    }
+  }
+}
+
 resource "kubernetes_persistent_volume_claim" "home" {
   metadata {
     name      = "coder-${data.coder_workspace.me.id}-home"
     namespace = var.namespace
-    labels = {
-      "app.kubernetes.io/name"     = "coder-pvc"
-      "app.kubernetes.io/instance" = "coder-pvc-${data.coder_workspace.me.id}"
-      "app.kubernetes.io/part-of"  = "coder"
-      //Coder-specific labels.
-      "com.coder.resource"       = "true"
-      "com.coder.workspace.id"   = data.coder_workspace.me.id
-      "com.coder.workspace.name" = data.coder_workspace.me.name
-      "com.coder.user.id"        = data.coder_workspace_owner.me.id
-      "com.coder.user.username"  = data.coder_workspace_owner.me.name
-    }
-    annotations = {
-      "com.coder.user.email" = data.coder_workspace_owner.me.email
-    }
   }
   wait_until_bound = false
   spec {
-    access_modes = ["ReadWriteMany"]
-    storage_class_name = "efs-coder-workspaces"
+    access_modes       = ["ReadWriteMany"]
+    storage_class_name = "efs-static"
+    volume_name        = kubernetes_persistent_volume.home.metadata.0.name
     resources {
       requests = {
-        storage = "${data.coder_parameter.disk_size.value}Gi"
+        storage = "50Gi"
       }
     }
   }
@@ -289,9 +316,6 @@ resource "kubernetes_persistent_volume_claim" "home" {
 
 resource "kubernetes_deployment" "dev" {
   count = data.coder_workspace.me.start_count
-  depends_on = [
-    kubernetes_persistent_volume_claim.home
-  ]
   wait_for_rollout = false
   metadata {
     name      = "coder-${data.coder_workspace.me.id}"
