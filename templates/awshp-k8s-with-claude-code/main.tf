@@ -12,6 +12,10 @@ terraform {
             source = "hashicorp/random"
             version = "3.7.2"
         }
+        aws = {
+            source = "hashicorp/aws"
+            version = ">= 5.0"
+        }
     }
 }
 
@@ -25,6 +29,12 @@ variable "workspace_image" {
   type        = string
   description = "Container image for workspace pods"
   default     = "codercom/enterprise-base:ubuntu"
+}
+
+variable "efs_file_system_id" {
+  type        = string
+  description = "EFS file system ID for persistent workspace storage"
+  default     = ""
 }
 
 variable "anthropic_model" {
@@ -242,6 +252,68 @@ resource "coder_app" "preview" {
 }
 
 
+resource "aws_efs_access_point" "home" {
+  file_system_id = var.efs_file_system_id
+
+  posix_user {
+    uid = 1000
+    gid = 1000
+  }
+
+  root_directory {
+    path = "/workspaces/${data.coder_workspace.me.id}"
+    creation_info {
+      owner_uid   = 1000
+      owner_gid   = 1000
+      permissions = "0755"
+    }
+  }
+
+  tags = {
+    Name = "coder-${data.coder_workspace.me.name}-home"
+    "com.coder.workspace.id" = data.coder_workspace.me.id
+  }
+}
+
+resource "kubernetes_persistent_volume" "home" {
+  metadata {
+    name = "coder-${data.coder_workspace.me.id}-home"
+  }
+  spec {
+    capacity = {
+      storage = "50Gi"
+    }
+    access_modes                     = ["ReadWriteMany"]
+    persistent_volume_reclaim_policy = "Retain"
+    storage_class_name               = ""
+    volume_mode                      = "Filesystem"
+    persistent_volume_source {
+      csi {
+        driver        = "efs.csi.aws.com"
+        volume_handle = "${var.efs_file_system_id}::${aws_efs_access_point.home.id}"
+      }
+    }
+  }
+}
+
+resource "kubernetes_persistent_volume_claim" "home" {
+  metadata {
+    name      = "coder-${data.coder_workspace.me.id}-home"
+    namespace = var.namespace
+  }
+  wait_until_bound = false
+  spec {
+    access_modes       = ["ReadWriteMany"]
+    storage_class_name = ""
+    volume_name        = kubernetes_persistent_volume.home.metadata.0.name
+    resources {
+      requests = {
+        storage = "50Gi"
+      }
+    }
+  }
+}
+
 resource "kubernetes_deployment" "dev" {
   count = data.coder_workspace.me.start_count
   wait_for_rollout = false
@@ -332,8 +404,9 @@ resource "kubernetes_deployment" "dev" {
 
         volume {
           name = "home"
-          empty_dir {
-            size_limit = "50Gi"
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim.home.metadata.0.name
+            read_only  = false
           }
         }
 

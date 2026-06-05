@@ -939,15 +939,6 @@ Resources:
                         --fargate-profile-name coder-workspaces
                       echo "Fargate profile is ACTIVE"
 
-                      # EFS CSI Driver installed as EKS managed addon
-                      # Wait for EFS CSI driver to be ready
-                      kubectl rollout status daemonset efs-csi-node -n kube-system --timeout=120s || true
-                      
-                      # Create EFS StorageClass for Fargate workspaces
-                      sed "s|PLACEHOLDER_EFS_ID|${EfsFileSystemId}|g" "$CODER_GITOPS_DIR/infrastructure/k8s/efs-storageclass.yaml" \
-                        | kubectl apply -f -
-                      echo "EFS StorageClass created"
-                      
                       PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
                       kubectl create secret generic coder-db-url -n coder --from-literal=url="$PostgreSQLConnectionURL"
                  
