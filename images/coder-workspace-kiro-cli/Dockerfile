@@ -1,6 +1,10 @@
-FROM codercom/enterprise-base:ubuntu
+FROM ubuntu:22.04
 
-USER root
+# Avoid interactive prompts during package install
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Create coder user (uid 1000) to match Fargate security context
+RUN useradd -m -s /bin/bash -u 1000 coder
 
 # System packages
 RUN apt-get update && apt-get install -y \
@@ -10,8 +14,11 @@ RUN apt-get update && apt-get install -y \
     dirmngr \
     jq \
     git \
+    ca-certificates \
     python3 \
     python3-pip \
+    bash \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 20 LTS
