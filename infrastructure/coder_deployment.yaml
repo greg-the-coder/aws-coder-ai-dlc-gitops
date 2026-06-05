@@ -304,6 +304,7 @@ Resources:
                   - kms:*
                   - cloudformation:*
                   - ecr:*
+                  - elasticfilesystem:*
                   - events:Describe*
                   - events:List*
                   - sts:AssumeRole
