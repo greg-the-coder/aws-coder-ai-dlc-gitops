@@ -207,7 +207,7 @@ Resources:
                 Action:
                   - codebuild:StartBuild
                   - codebuild:BatchGetBuilds
-                Resource: !GetAtt ImageBuildProject.Arn
+                Resource: !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/*'
 
   TriggerBuildLambda:
     Type: AWS::Lambda::Function
