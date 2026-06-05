@@ -216,7 +216,7 @@ Resources:
       Handler: index.handler
       Role: !GetAtt TriggerBuildLambdaRole.Arn
       Runtime: python3.12
-      Timeout: 60
+      Timeout: 900
       Code:
         ZipFile: |
           import boto3
@@ -246,6 +246,13 @@ Resources:
 
                   # Wait for build to complete
                   while True:
+                      # Check if we're about to timeout (leave 60s buffer for response)
+                      remaining_ms = context.get_remaining_time_in_millis()
+                      if remaining_ms < 60000:
+                          print(f"Lambda timeout approaching ({remaining_ms}ms remaining), build still running")
+                          response_data['Reason'] = f"Lambda timeout - build {build_id} still IN_PROGRESS. Check CodeBuild console."
+                          send_response(event, context, 'FAILED', response_data)
+                          return
                       time.sleep(30)
                       result = codebuild.batch_get_builds(ids=[build_id])
                       status = result['builds'][0]['buildStatus']
