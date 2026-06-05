@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM public.ecr.aws/docker/library/ubuntu:22.04
 
 # Avoid interactive prompts during package install
 ENV DEBIAN_FRONTEND=noninteractive
