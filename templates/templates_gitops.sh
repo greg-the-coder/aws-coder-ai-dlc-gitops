@@ -8,7 +8,9 @@
 export TF_VAR_coder_url=$CODER_AGENT_URL
 export TF_VAR_coder_token=$1
 export TF_VAR_coder_gitsha="$(git log -1 --format=%H)"
-export TF_VAR_workspace_image="${WorkspaceImageUri}:latest"
+export TF_VAR_workspace_image="${ClaudeCodeImageUri}"
+export TF_VAR_claude_code_image="${ClaudeCodeImageUri}"
+export TF_VAR_kiro_cli_image="${KiroCliImageUri}"
  
 MAX_ATTEMPTS=5
 ATTEMPT=1

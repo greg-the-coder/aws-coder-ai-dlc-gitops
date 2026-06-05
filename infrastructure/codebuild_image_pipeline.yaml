@@ -1,0 +1,303 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CodeBuild image pipeline for Coder workspace container images
+
+Parameters:
+  EKSClusterName:
+    Description: Name of the EKS Cluster (used for ECR repo naming)
+    Type: String
+    Default: "coder-aws-cluster"
+
+  GitRepoURL:
+    Description: Git repository URL containing the Dockerfiles
+    Type: String
+    Default: "https://github.com/greg-the-coder/aws-coder-ai-dlc-gitops.git"
+
+  GitBranch:
+    Description: Git branch to build from
+    Type: String
+    Default: "main"
+
+Resources:
+################## ECR Repositories #####################
+
+  ClaudeCodeImageRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${EKSClusterName}/coder-workspace-claude-code'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only last 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub '${EKSClusterName}-coder-workspace-claude-code'
+
+  KiroCliImageRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${EKSClusterName}/coder-workspace-kiro-cli'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only last 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub '${EKSClusterName}-coder-workspace-kiro-cli'
+
+################## IAM Role #####################
+
+  ImageBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${EKSClusterName}-image-build-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ImageBuildPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeRepositories
+                  - ecr:ListImages
+                Resource:
+                  - !GetAtt ClaudeCodeImageRepo.Arn
+                  - !GetAtt KiroCliImageRepo.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
+
+################## CodeBuild Project #####################
+
+  ImageBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${EKSClusterName}-workspace-image-build'
+      Description: Builds Coder workspace container images and pushes to ECR
+      ServiceRole: !GetAtt ImageBuildRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: AWS_REGION
+            Value: !Ref AWS::Region
+          - Name: CLAUDE_CODE_REPO_URI
+            Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-claude-code'
+          - Name: KIRO_CLI_REPO_URI
+            Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-kiro-cli'
+          - Name: GIT_REPO_URL
+            Value: !Ref GitRepoURL
+          - Name: GIT_BRANCH
+            Value: !Ref GitBranch
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo "Logging in to Amazon ECR..."
+                - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+                - echo "Cloning source repository..."
+                - git clone --branch $GIT_BRANCH --single-branch $GIT_REPO_URL source-repo
+                - COMMIT_SHA=$(cd source-repo && git rev-parse --short HEAD)
+                - echo "Building from commit $COMMIT_SHA"
+            build:
+              commands:
+                - echo "Building Claude Code workspace image..."
+                - docker build -t $CLAUDE_CODE_REPO_URI:latest -t $CLAUDE_CODE_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-claude-code/
+                - echo "Building Kiro CLI workspace image..."
+                - docker build -t $KIRO_CLI_REPO_URI:latest -t $KIRO_CLI_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-kiro-cli/
+            post_build:
+              commands:
+                - echo "Pushing Claude Code workspace image..."
+                - docker push $CLAUDE_CODE_REPO_URI:latest
+                - docker push $CLAUDE_CODE_REPO_URI:$COMMIT_SHA
+                - echo "Pushing Kiro CLI workspace image..."
+                - docker push $KIRO_CLI_REPO_URI:latest
+                - docker push $KIRO_CLI_REPO_URI:$COMMIT_SHA
+                - echo "All images pushed successfully"
+      TimeoutInMinutes: 30
+      Tags:
+        - Key: Name
+          Value: !Sub '${EKSClusterName}-workspace-image-build'
+
+################## Lambda to trigger initial build #####################
+
+  TriggerBuildLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: StartBuild
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                Resource: !GetAtt ImageBuildProject.Arn
+
+  TriggerBuildLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Triggers the workspace image build on stack create/update
+      Handler: index.handler
+      Role: !GetAtt TriggerBuildLambdaRole.Arn
+      Runtime: python3.12
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import urllib.request
+          import time
+
+          codebuild = boto3.client('codebuild')
+
+          def handler(event, context):
+              response_data = {}
+              response_data['PhysicalResourceId'] = 'image-build-trigger-' + str(int(time.time()))
+              response_data['StackId'] = event['StackId']
+              response_data['RequestId'] = event['RequestId']
+              response_data['LogicalResourceId'] = event['LogicalResourceId']
+
+              if event['RequestType'] == 'Delete':
+                  send_response(event, context, 'SUCCESS', response_data)
+                  return
+
+              try:
+                  build = codebuild.start_build(
+                      projectName=event['ResourceProperties']['ProjectName']
+                  )
+                  build_id = build['build']['id']
+                  print(f"Started build: {build_id}")
+
+                  # Wait for build to complete
+                  while True:
+                      time.sleep(30)
+                      result = codebuild.batch_get_builds(ids=[build_id])
+                      status = result['builds'][0]['buildStatus']
+                      print(f"Build status: {status}")
+                      if status == 'SUCCEEDED':
+                          send_response(event, context, 'SUCCESS', response_data)
+                          return
+                      elif status in ['FAILED', 'FAULT', 'STOPPED', 'TIMED_OUT']:
+                          response_data['Reason'] = f"Build {status}"
+                          send_response(event, context, 'FAILED', response_data)
+                          return
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  response_data['Reason'] = str(e)
+                  send_response(event, context, 'FAILED', response_data)
+
+          def send_response(event, context, status, response_data):
+              body = json.dumps({
+                  'Status': status,
+                  'Reason': response_data.get('Reason', 'See CloudWatch'),
+                  'PhysicalResourceId': response_data.get('PhysicalResourceId', context.log_stream_name),
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'Data': response_data
+              })
+              req = urllib.request.Request(
+                  url=event['ResponseURL'],
+                  data=body.encode('utf-8'),
+                  headers={'content-type': '', 'content-length': str(len(body))},
+                  method='PUT'
+              )
+              urllib.request.urlopen(req)
+
+  TriggerImageBuild:
+    Type: Custom::TriggerBuild
+    DependsOn:
+      - ImageBuildProject
+      - ClaudeCodeImageRepo
+      - KiroCliImageRepo
+    Properties:
+      ServiceToken: !GetAtt TriggerBuildLambda.Arn
+      ProjectName: !Ref ImageBuildProject
+
+Outputs:
+  ClaudeCodeImageUri:
+    Description: ECR URI for Claude Code workspace image
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-claude-code:latest'
+
+  KiroCliImageUri:
+    Description: ECR URI for Kiro CLI workspace image
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-kiro-cli:latest'
+
+  ImageBuildProjectName:
+    Description: CodeBuild project name for manual rebuilds
+    Value: !Ref ImageBuildProject

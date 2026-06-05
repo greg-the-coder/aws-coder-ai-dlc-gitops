@@ -32,6 +32,18 @@ variable "workspace_image" {
   default     = ""
 }
 
+variable "claude_code_image" {
+  type        = string
+  description = "ECR image URI for Claude Code workspace"
+  default     = ""
+}
+
+variable "kiro_cli_image" {
+  type        = string
+  description = "ECR image URI for Kiro CLI workspace"
+  default     = ""
+}
+
 provider "coderd" {
     url   = "${var.coder_url}"
     token = "${var.coder_token}"
@@ -57,7 +69,7 @@ resource "coderd_template" "awshp-k8s-with-claude-code" {
     },
     {
       name  = "workspace_image"
-      value = var.workspace_image
+      value = var.claude_code_image
     }]
   }]
 }
@@ -78,7 +90,7 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
     },
     {
       name  = "workspace_image"
-      value = var.workspace_image
+      value = var.kiro_cli_image
     }]
   }]
 }
