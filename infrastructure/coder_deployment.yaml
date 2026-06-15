@@ -899,14 +899,14 @@ Resources:
                     ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
                     PARTICIPANT_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/WSParticipantRole"
                     
-                    curl -o storageclass.yaml https://raw.githubusercontent.com/coder/aws-workshop-samples/refs/heads/main/coder-admin/storageclass.yaml
-                    curl -o coder-core-values-v2.yaml https://raw.githubusercontent.com/coder/aws-workshop-samples/refs/heads/main/coder-admin/coder-core-values-v2.yaml
-                    helm repo add coder-v2 https://helm.coder.com/v2
-                    helm repo update
-
-                    # Clone GitOps repo early for K8s manifest files
+                    # Clone GitOps repo early for K8s manifest and config files
                     git clone $CoderGitOpsTemplateRepoURL
                     CODER_GITOPS_DIR=$(basename "$CoderGitOpsTemplateRepoURL" .git)
+
+                    cp "$CODER_GITOPS_DIR/infrastructure/k8s/gp3-storageclass.yaml" storageclass.yaml
+                    cp "$CODER_GITOPS_DIR/infrastructure/helm/coder-values.yaml" coder-core-values-v2.yaml
+                    helm repo add coder-v2 https://helm.coder.com/v2
+                    helm repo update
 
                     if [ "$RetryFlag" != "True" ]; then
                       kubectl apply -f storageclass.yaml
