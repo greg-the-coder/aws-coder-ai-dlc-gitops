@@ -60,10 +60,9 @@ Parameters:
 
   CoderAdminPassword:
     Type: String
-    Description: Administrator password for Coder
+    Description: Administrator password for Coder (auto-generated, ignore this parameter)
     NoEcho: true
-    MinLength: 8
-    Default: admin@coder
+    Default: "auto-generated"
 
   CoderAdminName:
     Type: String
@@ -645,7 +644,12 @@ Resources:
     Properties:
       Name: !Sub '${EKSClusterName}-coder-admin-password'
       Description: Coder Administrator Password
-      SecretString: !Ref CoderAdminPassword
+      GenerateSecretString:
+        PasswordLength: 12
+        ExcludeCharacters: '"@/\\'
+        ExcludePunctuation: false
+        IncludeSpace: false
+        RequireEachIncludedType: true
 
   CoderSessionTokenSecret:
     Type: AWS::SecretsManager::Secret
@@ -782,7 +786,7 @@ Resources:
           - Name: CoderAdminName
             Value: !Ref CoderAdminName
           - Name: CoderAdminPassword
-            Value: !Ref CoderAdminPassword
+            Value: !Sub '{{resolve:secretsmanager:${CoderAdminPasswordSecret}:SecretString}}'
           - Name: CoderAdminUser
             Value: !Ref CoderAdminUser
           - Name: CoderPremiumTrial
@@ -1319,8 +1323,8 @@ Outputs:
     Value: !Ref CoderAdminEmail
 
   CoderAdminPassword:
-    Description: Coder Admin Password
-    Value: !Ref CoderAdminPassword
+    Description: Coder Admin Password (stored in Secrets Manager)
+    Value: !Sub '{{resolve:secretsmanager:${CoderAdminPasswordSecret}:SecretString}}'
 
   CoderAdminPasswordSecretArn:
     Description: ARN of the Coder Admin Password Secret
