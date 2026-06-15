@@ -1,16 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Cloudformation template for Coder and AWS Modernization Workshop
 Parameters:
-  WksModelS3BucketName:
-    Description: Assets bucket name
-    Type: String
-    Default: "ws-assets-prod-iad-r-gru-527b8c19222c1182"
-    
-  WksModelS3Prefix:
-    Description: Assets bucket prefix
-    Type: String
-    Default: "0e51c8ed-274c-4bf1-97b1-7758d17d5e1b/"
-
   KubernetesVersion:
     Description: Kubernetes version
     Type: String
@@ -797,10 +787,6 @@ Resources:
             Value: !Ref CoderGitOpsTemplateRepoURL  
           - Name: CoderSessionTokenSecretArn
             Value: !Ref CoderSessionTokenSecret  
-          - Name: WksModelS3BucketName
-            Value: !Ref WksModelS3BucketName  
-          - Name: WksModelS3Prefix
-            Value: !Ref WksModelS3Prefix  
           - Name: CLOUDFRONT_DISTRIBUTION_ID
             Value: !Ref CoderCloudFrontDistribution
           - Name: CLOUDFRONT_DOMAIN
