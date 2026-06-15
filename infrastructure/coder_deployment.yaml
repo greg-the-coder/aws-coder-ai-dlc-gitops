@@ -19,7 +19,7 @@ Parameters:
   CoderVersion:
     Description: Coder version
     Type: String
-    Default: "2.30.2"
+    Default: "2.34.2"
 
   EKSClusterName:
     Description: Name of EKS Cluster
