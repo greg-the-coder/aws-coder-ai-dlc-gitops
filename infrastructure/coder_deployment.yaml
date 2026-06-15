@@ -1,16 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Cloudformation template for Coder and AWS Modernization Workshop
 Parameters:
-  WksModelS3BucketName:
-    Description: Assets bucket name
-    Type: String
-    Default: "ws-assets-prod-iad-r-gru-527b8c19222c1182"
-    
-  WksModelS3Prefix:
-    Description: Assets bucket prefix
-    Type: String
-    Default: "0e51c8ed-274c-4bf1-97b1-7758d17d5e1b/"
-
   KubernetesVersion:
     Description: Kubernetes version
     Type: String
@@ -19,7 +9,7 @@ Parameters:
   CoderVersion:
     Description: Coder version
     Type: String
-    Default: "2.30.2"
+    Default: "2.34.2"
 
   EKSClusterName:
     Description: Name of EKS Cluster
@@ -60,10 +50,9 @@ Parameters:
 
   CoderAdminPassword:
     Type: String
-    Description: Administrator password for Coder
+    Description: Administrator password for Coder (auto-generated, ignore this parameter)
     NoEcho: true
-    MinLength: 8
-    Default: admin@coder
+    Default: "auto-generated"
 
   CoderAdminName:
     Type: String
@@ -645,7 +634,12 @@ Resources:
     Properties:
       Name: !Sub '${EKSClusterName}-coder-admin-password'
       Description: Coder Administrator Password
-      SecretString: !Ref CoderAdminPassword
+      GenerateSecretString:
+        PasswordLength: 12
+        ExcludeCharacters: '"@/\\'
+        ExcludePunctuation: false
+        IncludeSpace: false
+        RequireEachIncludedType: true
 
   CoderSessionTokenSecret:
     Type: AWS::SecretsManager::Secret
@@ -782,7 +776,7 @@ Resources:
           - Name: CoderAdminName
             Value: !Ref CoderAdminName
           - Name: CoderAdminPassword
-            Value: !Ref CoderAdminPassword
+            Value: !Sub '{{resolve:secretsmanager:${CoderAdminPasswordSecret}:SecretString}}'
           - Name: CoderAdminUser
             Value: !Ref CoderAdminUser
           - Name: CoderPremiumTrial
@@ -793,10 +787,6 @@ Resources:
             Value: !Ref CoderGitOpsTemplateRepoURL  
           - Name: CoderSessionTokenSecretArn
             Value: !Ref CoderSessionTokenSecret  
-          - Name: WksModelS3BucketName
-            Value: !Ref WksModelS3BucketName  
-          - Name: WksModelS3Prefix
-            Value: !Ref WksModelS3Prefix  
           - Name: CLOUDFRONT_DISTRIBUTION_ID
             Value: !Ref CoderCloudFrontDistribution
           - Name: CLOUDFRONT_DOMAIN
@@ -909,14 +899,14 @@ Resources:
                     ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
                     PARTICIPANT_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/WSParticipantRole"
                     
-                    curl -o storageclass.yaml https://raw.githubusercontent.com/coder/aws-workshop-samples/refs/heads/main/coder-admin/storageclass.yaml
-                    curl -o coder-core-values-v2.yaml https://raw.githubusercontent.com/coder/aws-workshop-samples/refs/heads/main/coder-admin/coder-core-values-v2.yaml
-                    helm repo add coder-v2 https://helm.coder.com/v2
-                    helm repo update
-
-                    # Clone GitOps repo early for K8s manifest files
+                    # Clone GitOps repo early for K8s manifest and config files
                     git clone $CoderGitOpsTemplateRepoURL
                     CODER_GITOPS_DIR=$(basename "$CoderGitOpsTemplateRepoURL" .git)
+
+                    cp "$CODER_GITOPS_DIR/infrastructure/k8s/gp3-storageclass.yaml" storageclass.yaml
+                    cp "$CODER_GITOPS_DIR/infrastructure/helm/coder-values.yaml" coder-core-values-v2.yaml
+                    helm repo add coder-v2 https://helm.coder.com/v2
+                    helm repo update
 
                     if [ "$RetryFlag" != "True" ]; then
                       kubectl apply -f storageclass.yaml
@@ -1319,8 +1309,8 @@ Outputs:
     Value: !Ref CoderAdminEmail
 
   CoderAdminPassword:
-    Description: Coder Admin Password
-    Value: !Ref CoderAdminPassword
+    Description: Coder Admin Password (stored in Secrets Manager)
+    Value: !Sub '{{resolve:secretsmanager:${CoderAdminPasswordSecret}:SecretString}}'
 
   CoderAdminPasswordSecretArn:
     Description: ARN of the Coder Admin Password Secret
