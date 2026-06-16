@@ -37,12 +37,6 @@ variable "efs_file_system_id" {
   default     = ""
 }
 
-variable "anthropic_model" {
-  type        = string
-  description = "The AWS Inference profile ID of the base Anthropic model to use with Claude Code"
-  default     = "us.anthropic.claude-sonnet-4-20250514-v1:0"
-}
-
 locals {
   home_dir = "/home/coder"
   bin_path = "/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -84,12 +78,6 @@ data "coder_parameter" "memory" {
 
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
-
-resource "coder_env" "bedrock_use" {
-  agent_id = coder_agent.dev.id
-  name     = "CLAUDE_CODE_USE_BEDROCK"
-  value    = "1"
-}
 
 resource "coder_env" "path" {
   agent_id = coder_agent.dev.id
@@ -137,47 +125,6 @@ module "code-server" {
     folder         = local.home_dir
     subdomain = false
     order = 0
-}
-
-module "claude-code" {
-    count               = data.coder_workspace.me.start_count
-    source              = "registry.coder.com/coder/claude-code/coder"
-    version             = "4.9.0"
-    model               = var.anthropic_model
-    agent_id            = coder_agent.dev.id
-    workdir             = local.home_dir
-    subdomain           = false
-    report_tasks        = true
-    dangerously_skip_permissions = true
-        
-    pre_install_script = <<-EOF
-    set -e
-
-    # Create persistent bin directory
-    mkdir -p $HOME/bin
-    mkdir -p $HOME/.local/bin
-
-    # Update PATH for current session
-    export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$PATH"
-
-    #Symlink Coder Agent
-    ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder"
-
-    EOF
-
-    post_install_script = <<-EOF
-
-# Bypass the dangerously-skip-permissions TOS prompt
-mkdir -p "$HOME/.claude"
-if [ -f "$HOME/.claude/settings.json" ]; then
-  tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true}' "$HOME/.claude/settings.json" > "$tmp" && mv "$tmp" "$HOME/.claude/settings.json" || true
-else
-  echo '{"skipDangerousModePermissionPrompt": true}' > "$HOME/.claude/settings.json"
-fi
-
-EOF
-
-    order               = 999
 }
 
 
