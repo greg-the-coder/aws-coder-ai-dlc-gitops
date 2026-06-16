@@ -40,7 +40,7 @@ RUN npm install -g aws-cdk
 RUN curl -LsSf https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL=/usr/local/bin sh
 
 # Python AI/ML libraries for all challenges
-RUN pip3 install --break-system-packages --no-cache-dir \
+RUN pip3 install --no-cache-dir \
     boto3 \
     botocore \
     strands-agents \
