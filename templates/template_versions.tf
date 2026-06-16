@@ -122,7 +122,7 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
 resource "coderd_template" "challenge-agent" {
   name        = "awshp-k8s-challenge-agent"
   display_name = "Clash of Agents - Challenge Workspace"
-  description = "Use this template for Clash of Agents workshop challenges. Pre-installed Python SDKs: Strands Agents, LangGraph, LlamaIndex, Bedrock Knowledge Bases, Lyzr, Arize Phoenix, OpenTelemetry. Includes AWS CLI, CDK, Node.js, and full Bedrock access for building AI agents."
+  description = "Clash of Agents challenges. Pre-installed: Strands Agents, LangGraph, LlamaIndex, Lyzr, Bedrock."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-challenge-agent"

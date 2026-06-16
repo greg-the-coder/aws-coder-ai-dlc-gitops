@@ -40,7 +40,8 @@ RUN npm install -g aws-cdk
 RUN curl -LsSf https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL=/usr/local/bin sh
 
 # Python AI/ML libraries for all challenges
-RUN pip3 install --break-system-packages --no-cache-dir \
+# Using uv for fast dependency resolution (pip backtracks heavily with these packages)
+RUN uv pip install --system --no-cache \
     boto3 \
     botocore \
     strands-agents \
@@ -64,6 +65,10 @@ RUN pip3 install --break-system-packages --no-cache-dir \
     requests \
     pydantic \
     httpx
+
+# Playwright headless browser for web scraping (used by agents to access workshop content)
+RUN pip3 install playwright \
+    && playwright install chromium --with-deps
 
 # Ensure coder user owns their home directory
 RUN chown -R coder:coder /home/coder
