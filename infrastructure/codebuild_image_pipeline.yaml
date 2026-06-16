@@ -80,6 +80,36 @@ Resources:
         - Key: Name
           Value: !Sub '${EKSClusterName}-coder-workspace-kiro-cli'
 
+  ChallengeImageRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${EKSClusterName}/coder-workspace-challenge'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only last 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub '${EKSClusterName}-coder-workspace-challenge'
+
 ################## IAM Role #####################
 
   ImageBuildRole:
@@ -116,6 +146,7 @@ Resources:
                 Resource:
                   - !GetAtt ClaudeCodeImageRepo.Arn
                   - !GetAtt KiroCliImageRepo.Arn
+                  - !GetAtt ChallengeImageRepo.Arn
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
@@ -147,6 +178,8 @@ Resources:
             Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-claude-code'
           - Name: KIRO_CLI_REPO_URI
             Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-kiro-cli'
+          - Name: CHALLENGE_REPO_URI
+            Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-challenge'
           - Name: GIT_REPO_URL
             Value: !Ref GitRepoURL
           - Name: GIT_BRANCH
@@ -180,6 +213,13 @@ Resources:
                     echo "Build attempt $i failed, waiting 60s before retry..."
                     sleep 60
                   done
+                - echo "Building Challenge workspace image..."
+                - |
+                  for i in 1 2 3; do
+                    docker build -t $CHALLENGE_REPO_URI:latest -t $CHALLENGE_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-challenge/ && break
+                    echo "Build attempt $i failed, waiting 60s before retry..."
+                    sleep 60
+                  done
             post_build:
               commands:
                 - echo "Pushing Claude Code workspace image..."
@@ -188,6 +228,9 @@ Resources:
                 - echo "Pushing Kiro CLI workspace image..."
                 - docker push $KIRO_CLI_REPO_URI:latest
                 - docker push $KIRO_CLI_REPO_URI:$COMMIT_SHA
+                - echo "Pushing Challenge workspace image..."
+                - docker push $CHALLENGE_REPO_URI:latest
+                - docker push $CHALLENGE_REPO_URI:$COMMIT_SHA
                 - echo "All images pushed successfully"
       TimeoutInMinutes: 30
       Tags:
@@ -315,6 +358,10 @@ Outputs:
   KiroCliImageUri:
     Description: ECR URI for Kiro CLI workspace image
     Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-kiro-cli:latest'
+
+  ChallengeImageUri:
+    Description: ECR URI for Challenge workspace image
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-challenge:latest'
 
   ImageBuildProjectName:
     Description: CodeBuild project name for manual rebuilds

@@ -44,6 +44,12 @@ variable "kiro_cli_image" {
   default     = ""
 }
 
+variable "challenge_image" {
+  type        = string
+  description = "ECR image URI for Challenge workspace"
+  default     = ""
+}
+
 variable "efs_file_system_id" {
   type        = string
   description = "EFS file system ID for persistent workspace storage"
@@ -113,13 +119,13 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
 # Challenge Templates - Clash of Agents Workshop
 ###########################################################
 
-resource "coderd_template" "challenge-staff-agent" {
-  name        = "awshp-k8s-challenge-staff-agent"
-  display_name = "Challenge: Staff Support Agent"
-  description = "Build a multi-agent customer service system using Strands Agents SDK or LangGraph ReAct SDK, Knowledge Bases, and Action Groups."
+resource "coderd_template" "challenge-agent" {
+  name        = "awshp-k8s-challenge-agent"
+  display_name = "Clash of Agents - Challenge Workspace"
+  description = "AI-powered workspace with Claude Code agent and pre-installed SDKs for Clash of Agents challenges (Strands Agents, LangGraph, LlamaIndex, Bedrock)."
   icon = "/icon/k8s.png"
   versions = [{
-    directory = "./awshp-k8s-challenge-staff-agent"
+    directory = "./awshp-k8s-challenge-agent"
     active    = true
     name = var.coder_gitsha
     tf_vars = [{
@@ -128,55 +134,7 @@ resource "coderd_template" "challenge-staff-agent" {
     },
     {
       name  = "workspace_image"
-      value = var.kiro_cli_image
-    },
-    {
-      name  = "efs_file_system_id"
-      value = var.efs_file_system_id
-    }]
-  }]
-}
-
-resource "coderd_template" "challenge-ops-agent" {
-  name        = "awshp-k8s-challenge-ops-agent"
-  display_name = "Challenge: Operations Intelligence Agent"
-  description = "Build a document processing agent using LlamaIndex Workflows and Amazon Bedrock Knowledge Bases."
-  icon = "/icon/k8s.png"
-  versions = [{
-    directory = "./awshp-k8s-challenge-ops-agent"
-    active    = true
-    name = var.coder_gitsha
-    tf_vars = [{
-      name  = "namespace"
-      value = "coder-ws"
-    },
-    {
-      name  = "workspace_image"
-      value = var.kiro_cli_image
-    },
-    {
-      name  = "efs_file_system_id"
-      value = var.efs_file_system_id
-    }]
-  }]
-}
-
-resource "coderd_template" "challenge-nocode-agent" {
-  name        = "awshp-k8s-challenge-nocode-agent"
-  display_name = "Challenge: Multi-agent Customer Support (No-Code)"
-  description = "Build a Manager-Subagent Architecture using Lyzr Studio and Amazon Bedrock Knowledge Bases."
-  icon = "/icon/k8s.png"
-  versions = [{
-    directory = "./awshp-k8s-challenge-nocode-agent"
-    active    = true
-    name = var.coder_gitsha
-    tf_vars = [{
-      name  = "namespace"
-      value = "coder-ws"
-    },
-    {
-      name  = "workspace_image"
-      value = var.kiro_cli_image
+      value = var.challenge_image
     },
     {
       name  = "efs_file_system_id"

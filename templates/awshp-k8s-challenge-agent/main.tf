@@ -1,5 +1,3 @@
-# Challenge: Operations Intelligence Agent - Build a document processing agent
-
 terraform {
     required_providers {
         kubernetes = {
@@ -23,7 +21,7 @@ terraform {
 
 variable "namespace" {
   type        = string
-  description = "The Kubernetes namespace to create workspaces in (must exist prior to creating workspaces). If the Coder host is itself running as a Pod on the same Kubernetes cluster as you are deploying workspaces to, set this to the same namespace."
+  description = "The Kubernetes namespace to create workspaces in (must exist prior to creating workspaces)."
   default     = "coder-ws"
 }
 
@@ -39,22 +37,16 @@ variable "efs_file_system_id" {
   default     = ""
 }
 
-variable "mcp_bearer_token_pulumi" {
+variable "anthropic_model" {
   type        = string
-  description = "Your Pulumi MCP bearer token. This provides access to Pulumi MCP Server via Kiro CLI."
-  sensitive   = true
-  default     = "pul-xxxx-xxx-xxxx"
-}
-
-variable "mcp_bearer_token_launchdarkly" {
-  type        = string
-  description = "Your LaunchDarkly MCP API Key. This provides access to LaunchDarkly MCP Server via Kiro CLI."
-  sensitive   = true
-  default     = "api-xxxx-xxx-xxxx"
+  description = "The AWS Inference profile ID of the base Anthropic model to use with Claude Code"
+  default     = "us.anthropic.claude-sonnet-4-20250514-v1:0"
 }
 
 locals {
-  home_dir        = "/home/coder"
+  home_dir = "/home/coder"
+  bin_path = "/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  cost     = 2
 }
 
 # Minimum vCPUs needed 
@@ -93,18 +85,22 @@ data "coder_parameter" "memory" {
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
 
-locals {
-    cost = 2
-    home_folder = "/home/coder"
+resource "coder_env" "bedrock_use" {
+  agent_id = coder_agent.dev.id
+  name     = "CLAUDE_CODE_USE_BEDROCK"
+  value    = "1"
+}
+
+resource "coder_env" "path" {
+  agent_id = coder_agent.dev.id
+  name     = "PATH"
+  value    = local.bin_path
 }
 
 resource "coder_agent" "dev" {
     arch = "amd64"
     os = "linux"
 
-    env = {
-        PATH = "/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-    }
     display_apps {
         vscode          = false
         vscode_insiders = false
@@ -121,81 +117,11 @@ resource "coder_agent" "dev" {
     # Update PATH for current session
     export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$PATH"
 
-    # Configure Kiro CLI MCP servers
-    echo "Configuring Kiro CLI MCP servers..."
-
-    # Create user-level MCP configuration
-    mkdir -p $HOME/.kiro/settings
-    cat > $HOME/.kiro/settings/mcp.json <<MCP_EOF
-{
-  "mcpServers": {
-    "pulumi": {
-      "headers": {
-        "Authorization": "Bearer ${var.mcp_bearer_token_pulumi}"
-      },
-      "type": "http",
-      "url": "https://mcp.ai.pulumi.com/mcp"
-    },
-    "LaunchDarkly": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "--package",
-        "@launchdarkly/mcp-server",
-        "--",
-        "mcp",
-        "start",
-        "--api-key",
-        "${var.mcp_bearer_token_launchdarkly}"
-      ]
-    },
-    "arize-tracing-assistant": {
-      "command": "/home/coder/.local/bin/uvx",
-      "args": ["arize-tracing-assistant@latest"]
-    }
-  }
-}
-MCP_EOF
-
-    echo "Kiro CLI MCP configuration completed (user-level)"
-
-    # Configure workspace trust settings for Kiro IDE
-    echo "Configuring Kiro IDE workspace trust..."
-    mkdir -p $HOME/.local/share/code-server/User
-
-    # Create or update settings.json to trust the home folder
-    cat > $HOME/.local/share/code-server/User/settings.json <<'SETTINGS_EOF'
-{
-  "security.workspace.trust.enabled": true,
-  "security.workspace.trust.startupPrompt": "never",
-  "security.workspace.trust.emptyWindow": false,
-  "security.workspace.trust.untrustedFiles": "open"
-}
-SETTINGS_EOF
-
-    # Add trusted folders configuration
-    mkdir -p $HOME/.kiro/settings
-    cat > $HOME/.kiro/settings/trusted-workspaces.json <<'TRUST_EOF'
-{
-  "trustedFolders": [
-    "/home/coder"
-  ]
-}
-TRUST_EOF
-
-    echo "Kiro IDE workspace trust configuration completed"
-
     #Symlink Coder Agent
     ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder"
 
     EOT
 
-}
-
-resource "coder_env" "challenge_type" {
-  agent_id = coder_agent.dev.id
-  name     = "CHALLENGE_TYPE"
-  value    = "ops-intelligence-agent"
 }
 
 module "coder-login" {
@@ -208,26 +134,50 @@ module "code-server" {
     source   = "registry.coder.com/coder/code-server/coder"
     version  = "1.3.1"
     agent_id       = coder_agent.dev.id
-    folder         = local.home_folder
+    folder         = local.home_dir
     subdomain = false
     order = 0
 }
 
-module "kiro" {
-    source   = "registry.coder.com/coder/kiro/coder"
-    version  = "1.1.0"
-    agent_id = coder_agent.dev.id
-    order = 1
-}
+module "claude-code" {
+    count               = data.coder_workspace.me.start_count
+    source              = "registry.coder.com/coder/claude-code/coder"
+    version             = "4.9.0"
+    model               = var.anthropic_model
+    agent_id            = coder_agent.dev.id
+    workdir             = local.home_dir
+    subdomain           = false
+    report_tasks        = true
+    dangerously_skip_permissions = true
+        
+    pre_install_script = <<-EOF
+    set -e
 
-resource "coder_app" "kiro_cli" {
-    agent_id     = coder_agent.dev.id
-    slug         = "kiro-auth"
-    display_name = "Kiro CLI"
-    icon         = "${data.coder_workspace.me.access_url}/icon/kiro.svg"
-    command      = "kiro-cli"
-    share        = "owner"
-    order        = 2
+    # Create persistent bin directory
+    mkdir -p $HOME/bin
+    mkdir -p $HOME/.local/bin
+
+    # Update PATH for current session
+    export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$PATH"
+
+    #Symlink Coder Agent
+    ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder"
+
+    EOF
+
+    post_install_script = <<-EOF
+
+# Bypass the dangerously-skip-permissions TOS prompt
+mkdir -p "$HOME/.claude"
+if [ -f "$HOME/.claude/settings.json" ]; then
+  tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true}' "$HOME/.claude/settings.json" > "$tmp" && mv "$tmp" "$HOME/.claude/settings.json" || true
+else
+  echo '{"skipDangerousModePermissionPrompt": true}' > "$HOME/.claude/settings.json"
+fi
+
+EOF
+
+    order               = 999
 }
 
 
@@ -375,7 +325,7 @@ resource "kubernetes_deployment" "dev" {
             }
           }
           volume_mount {
-            mount_path = "/home/coder"
+            mount_path = local.home_dir
             name       = "home"
             read_only  = false
           }
