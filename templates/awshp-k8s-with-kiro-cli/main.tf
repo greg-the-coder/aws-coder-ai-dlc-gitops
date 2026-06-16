@@ -99,7 +99,7 @@ locals {
 resource "coder_agent" "dev" {
     arch = "amd64"
     os = "linux"
-    dir = local.home_folder
+
     env = {
         PATH = "/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     }

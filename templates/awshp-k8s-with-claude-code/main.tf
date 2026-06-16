@@ -149,7 +149,7 @@ resource "coder_env" "path" {
 resource "coder_agent" "dev" {
     arch = "amd64"
     os = "linux"
-    dir = local.home_dir
+
     display_apps {
         vscode          = false
         vscode_insiders = false
