@@ -66,6 +66,10 @@ RUN uv pip install --system --no-cache \
     pydantic \
     httpx
 
+# Playwright headless browser for web scraping (used by agents to access workshop content)
+RUN pip3 install playwright \
+    && playwright install chromium --with-deps
+
 # Ensure coder user owns their home directory
 RUN chown -R coder:coder /home/coder
 

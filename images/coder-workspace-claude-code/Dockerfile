@@ -41,6 +41,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL=/usr/local
 # Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
+# Playwright headless browser for web scraping (used by agents to access workshop content)
+RUN pip3 install playwright \
+    && playwright install chromium --with-deps
+
 # Ensure coder user owns their home directory
 RUN chown -R coder:coder /home/coder
 

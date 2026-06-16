@@ -53,6 +53,10 @@ RUN curl -LO "https://dl.nirmata.io/nctl/nctl_${NCTL_VERSION}/nctl_${NCTL_VERSIO
     && chmod +x /usr/local/bin/nctl \
     && rm -f "nctl_${NCTL_VERSION}_linux_amd64.zip"*
 
+# Playwright headless browser for web scraping (used by agents to access workshop content)
+RUN pip3 install playwright \
+    && playwright install chromium --with-deps
+
 # Ensure coder user owns their home directory
 RUN chown -R coder:coder /home/coder
 
