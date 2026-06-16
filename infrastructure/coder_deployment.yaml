@@ -849,8 +849,6 @@ Resources:
                     - name: aws-ebs-csi-driver
                       version: latest
                     - name: aws-efs-csi-driver
-                      version: latest
-                    - name: coredns
                       version: latest  
                       
                   cloudWatch:
@@ -895,6 +893,11 @@ Resources:
                     echo "EKS cluster creation successful"
                     
                     aws eks update-kubeconfig --region ${AWSRegion} --name ${EKSClusterName}
+                    
+                    # Install CoreDNS addon (required for DNS, cannot be in eksctl config with Auto Mode)
+                    aws eks create-addon --cluster-name ${EKSClusterName} --addon-name coredns --region ${AWSRegion} || true
+                    echo "Waiting for CoreDNS addon to become ACTIVE..."
+                    aws eks wait addon-active --cluster-name ${EKSClusterName} --addon-name coredns --region ${AWSRegion} || true
                     
                     ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
                     PARTICIPANT_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/WSParticipantRole"
