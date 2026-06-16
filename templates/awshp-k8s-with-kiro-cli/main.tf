@@ -272,7 +272,7 @@ resource "kubernetes_persistent_volume_claim" "home" {
     name      = "coder-${data.coder_workspace.me.id}-home"
     namespace = var.namespace
   }
-  wait_until_bound = false
+  wait_until_bound = true
   spec {
     access_modes       = ["ReadWriteMany"]
     storage_class_name = "efs-static"
