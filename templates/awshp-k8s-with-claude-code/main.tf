@@ -40,62 +40,13 @@ variable "efs_file_system_id" {
 variable "anthropic_model" {
   type        = string
   description = "The AWS Inference profile ID of the base Anthropic model to use with Claude Code"
-  default     = "global.anthropic.claude-opus-4-5-20251101-v1:0"
+  default     = "us.anthropic.claude-sonnet-4-20250514-v1:0"
 }
-
-data "coder_task" "me" {}
 
 locals {
   home_dir = "/home/coder"
   bin_path = "/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   cost     = 2
-  port     = 3000
-  domain   = element(split("/", data.coder_workspace.me.access_url), -1)
-  
-  task_prompt = join(" ", [
-    "First, post a 'task started' update to Coder.",
-    "Then, review all of your memory.",
-    "Finally, ${data.coder_task.me.prompt}.",
-  ])
-  
-  system_prompt = <<-EOT
-    Hey! First, report an initial task to Coder to show you have started! The user has provided you with a prompt of something to create. Create it the best you can, and keep it as succinct as possible.
-    
-    If you're being tasked to create a web application, then:
-    - ALWAYS start the server using `python3` or `node` on localhost:${local.port}.
-    - BEFORE starting the server, ALWAYS attempt to kill ANY process using port ${local.port}, and then run the dev server on port ${local.port}.
-    - ALWAYS build the project using dev servers (and ALWAYS VIA desktop-commander)
-    - When finished, you should use Playwright to review the HTML to ensure it is working as expected.
-
-    ALWAYS run long-running commands (e.g. `pnpm dev` or `npm run dev`) using desktop-commander so it runs it in the background and users can prompt you.  Other short-lived commands (build, test, cd, write, read, view, etc) can run normally.
-
-    NEVER run the dev server without desktop-commander.
-
-    For previewing, always use the dev server for fast feedback loops (never do a full Next.js build, for exmaple). A simple HTML/static is preferred for web applications, but pick the best AND lightest framework for the job.
-    
-    The dev server will ALWAYS be on localhost:${local.port} and NEVER start on another port. If the dev server crashes for some reason, kill port ${local.port} (or the desktop-commander session) and restart the dev server.
-
-    After large changes, use Playwright to ensure your changes work (preview localhost:${local.port}). Take a screenshot, look at the screenshot. Also look at the HTML output from Playwright. If there are errors or something looks "off," fix it.
-    
-    Aim to autonomously investigate and solve issues the user gives you and test your work, whenever possible.
-    
-    Avoid shortcuts like mocking tests. When you get stuck, you can ask the user but opt for autonomy.
-    
-    In your task reports to Coder:
-    - Be specific about what you're doing
-    - Clearly indicate what information you need from the user when in "failure" state
-    - Keep it under 160 characters
-    - Make it actionable
-
-    If you're being tasked to create a Coder template, then,
-    - You must ALWAYS ask the user for permission to push it. 
-    - You are NOT allowed to push templates OR create workspaces from them without the users explicit approval.
-
-    If you're being tasked to create additional Coder tasks or workspaces, ALWAYS use `coder task create` instead of `coder create`.
-    - Example: coder task create --template "awshp-k8s-with-claude-code" "<your prompt here>"
-
-    When reporting URLs to Coder, report to "https://preview--dev--${data.coder_workspace.me.name}--${data.coder_workspace_owner.me.name}.${local.domain}/" that proxies port ${local.port}
-  EOT
 }
 
 # Minimum vCPUs needed 
@@ -193,11 +144,8 @@ module "claude-code" {
     agent_id            = coder_agent.dev.id
     workdir             = local.home_dir
     subdomain           = false
-    ai_prompt           = local.task_prompt
-    system_prompt       = local.system_prompt
     report_tasks        = true
     dangerously_skip_permissions = true
-  # permission_mode     = "bypassPermissions"
         
     pre_install_script = <<-EOF
     set -e
@@ -227,28 +175,6 @@ fi
 EOF
 
     order               = 999
-}
-
-resource "coder_ai_task" "claude-code" {
-    count  = data.coder_workspace.me.start_count
-    app_id = module.claude-code[0].task_app_id
-}
-
-resource "coder_app" "preview" {
-    agent_id     = coder_agent.dev.id
-    slug         = "preview"
-    display_name = "Preview your app"
-    icon         = "${data.coder_workspace.me.access_url}/emojis/1f50e.png"
-    url          = "http://localhost:${local.port}"
-    share        = "authenticated"
-    subdomain    = false
-    open_in      = "tab"
-    order = 3
-    healthcheck {
-        url       = "http://localhost:${local.port}/"
-        interval  = 5
-        threshold = 15
-    }
 }
 
 
