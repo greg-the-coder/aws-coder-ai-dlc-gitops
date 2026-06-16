@@ -44,6 +44,12 @@ variable "kiro_cli_image" {
   default     = ""
 }
 
+variable "challenge_image" {
+  type        = string
+  description = "ECR image URI for Challenge workspace"
+  default     = ""
+}
+
 variable "efs_file_system_id" {
   type        = string
   description = "EFS file system ID for persistent workspace storage"
@@ -101,6 +107,34 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
     {
       name  = "workspace_image"
       value = var.kiro_cli_image
+    },
+    {
+      name  = "efs_file_system_id"
+      value = var.efs_file_system_id
+    }]
+  }]
+}
+
+###########################################################
+# Challenge Templates - Clash of Agents Workshop
+###########################################################
+
+resource "coderd_template" "challenge-agent" {
+  name        = "awshp-k8s-challenge-agent"
+  display_name = "Clash of Agents - Challenge Workspace"
+  description = "Use this template for Clash of Agents workshop challenges. Pre-installed Python SDKs: Strands Agents, LangGraph, LlamaIndex, Bedrock Knowledge Bases, Lyzr, Arize Phoenix, OpenTelemetry. Includes AWS CLI, CDK, Node.js, and full Bedrock access for building AI agents."
+  icon = "/icon/k8s.png"
+  versions = [{
+    directory = "./awshp-k8s-challenge-agent"
+    active    = true
+    name = var.coder_gitsha
+    tf_vars = [{
+      name  = "namespace"
+      value = "coder-ws"
+    },
+    {
+      name  = "workspace_image"
+      value = var.challenge_image
     },
     {
       name  = "efs_file_system_id"

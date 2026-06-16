@@ -11,6 +11,7 @@ export TF_VAR_coder_gitsha="$(git log -1 --format=%H)"
 export TF_VAR_workspace_image="${ClaudeCodeImageUri}"
 export TF_VAR_claude_code_image="${ClaudeCodeImageUri}"
 export TF_VAR_kiro_cli_image="${KiroCliImageUri}"
+export TF_VAR_challenge_image="${ChallengeImageUri}"
 export TF_VAR_efs_file_system_id="${EfsFileSystemId}"
  
 MAX_ATTEMPTS=5

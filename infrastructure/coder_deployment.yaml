@@ -803,6 +803,8 @@ Resources:
             Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-claude-code:latest'
           - Name: KiroCliImageUri
             Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-kiro-cli:latest'
+          - Name: ChallengeImageUri
+            Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-challenge:latest'
           
       Source:
         Type: NO_SOURCE
@@ -1354,3 +1356,7 @@ Outputs:
   KiroCliImageUri:
     Description: ECR URI for Kiro CLI workspace image
     Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-kiro-cli:latest'
+
+  ChallengeImageUri:
+    Description: ECR URI for Challenge workspace image
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-challenge:latest'
