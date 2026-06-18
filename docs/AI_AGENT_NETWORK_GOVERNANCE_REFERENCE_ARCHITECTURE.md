@@ -373,7 +373,7 @@ Node Envoy:
 
 | Solution | Why Rejected |
 |----------|--------------|
-| **Coder Agent Firewall (boundary)** | Cannot enforce on Fargate (no `CAP_NET_ADMIN`). On EC2 it works but requires per-pod capability escalation and is a Coder-specific tool with limited customer adoption. |
+| **Coder Agent Firewall (boundary)** | **Implementation complexity:** Requires `CAP_NET_ADMIN` capability, `iproute2` packages, and either Landlock v4 (kernel 6.10+) or network namespace support — none of which are available on Fargate, and which require explicit pod security escalation on EC2. The module's install process is fragile (depends on shim scripts, binary copying, and specific kernel features) and failed silently in our testing. **Bypass vulnerability:** Enforcement is process-level only — it wraps commands spawned through the Coder agent's subprocess boundary. A human user in the same workspace terminal can trivially bypass it by running commands directly (not through the agent), accessing unrestricted network from an unwrapped shell, or simply saving fetched content to the shared filesystem for the agent to read. An agent could also instruct the human to perform actions on its behalf. **Adoption:** Low customer adoption makes long-term support and reliability uncertain. |
 | **AWS Bedrock Guardrails** | Content safety filter, not network security. Cannot intercept tool calls or enforce URL allowlists. Wrong architectural layer. |
 | **AWS Bedrock AgentCore** | Purpose-built agent runtime with 8hr max sessions. Not a workspace host. Network controls limited to VPC security groups (same as Fargate). |
 | **Linkerd EgressNetwork** | Requires `CAP_NET_ADMIN` for traffic interception. SNI-only for HTTPS (no path filtering). Less mature egress features. |
@@ -382,7 +382,7 @@ Node Envoy:
 | **Calico Enterprise** | FQDN filtering is paid-only. No L7 path filtering on egress. |
 | **AWS VPC CNI NetworkPolicy** | L3/L4 only (IP + port). No FQDN or L7 capability. |
 | **Fargate + DNS Firewall** | Domain-level only (no path filtering). DNS Firewall is VPC-scoped (affects all workloads). Bypassable via hardcoded IPs. |
-| **Per-process restrictions** | Bypassable via shared filesystem. Security theater when human and agent coexist. |
+| **Per-process restrictions** (including Coder Agent Firewall's model) | Fundamentally flawed for shared workspaces. A process-level boundary (network namespace per subprocess) can be bypassed by: (1) humans running commands outside the wrapped boundary, (2) agents instructing humans to fetch restricted content, (3) either party saving data to the shared filesystem where the other reads it. This is the same enforcement model as Coder Agent Firewall — it only restricts processes launched *through* the agent subprocess wrapper, leaving human terminal sessions entirely unrestricted. |
 
 ---
 
@@ -545,7 +545,7 @@ Network policy changes are applied via `kubectl apply` — no pod restart needed
 | 6 | DNS Firewall as backstop, not primary | Cilium is primary (namespace-scoped, path-capable); DNS Firewall is VPC-wide defense-in-depth | 2026-06-17 |
 | 7 | Reject Bedrock Guardrails for this use case | Content filter, not network security. Cannot intercept tool execution. Wrong layer. | 2026-06-17 |
 | 8 | Reject Bedrock AgentCore as workspace host | 8hr max session, no port exposure, no persistent compute. Purpose-built for agent sessions, not developer workspaces. | 2026-06-17 |
-| 9 | Reject Coder Agent Firewall | Low customer adoption. Requires CAP_NET_ADMIN (same EC2 requirement as Cilium, but weaker enforcement — process-level vs kernel-level) | 2026-06-17 |
+| 9 | Reject Coder Agent Firewall | **Three compounding issues:** (1) Difficult to implement — requires kernel capabilities (`CAP_NET_ADMIN`), specific binaries (`iproute2`), and fragile install scripts that fail silently on modern EKS AMIs. (2) Process-level enforcement is trivially bypassable — humans can access unrestricted network from unwrapped shells; agents can request humans fetch data; any data retrieved exists on the shared filesystem regardless of which process fetched it. (3) Low customer adoption signals uncertain long-term viability. Cilium provides the same domain+path filtering at the kernel level where neither human nor agent can bypass it. | 2026-06-17 |
 
 ---
 
