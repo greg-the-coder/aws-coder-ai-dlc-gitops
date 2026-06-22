@@ -59,13 +59,11 @@ Parameters:
     Description: Coder Administrator Full Name
     Default: "Admin User"
 
-  CoderPremiumTrial:
+
+  CoderLicenseKey:
     Type: String
-    Description: Start 30-Day Coder Premium Trial
-    AllowedValues:
-      - "true"
-      - "false"
-    Default: "false"
+    Description: Coder Premium Trial License Key
+    Default: ""
 
   CoderGitOpsTemplateRepoURL:
     Type: String
@@ -779,8 +777,8 @@ Resources:
             Value: !Sub '{{resolve:secretsmanager:${CoderAdminPasswordSecret}:SecretString}}'
           - Name: CoderAdminUser
             Value: !Ref CoderAdminUser
-          - Name: CoderPremiumTrial
-            Value: !Ref CoderPremiumTrial      
+          - Name: CoderLicenseKey
+            Value: !Ref CoderLicenseKey      
           - Name: RetryFlag
             Value: !Ref RetryFlag    
           - Name: CoderGitOpsTemplateRepoURL
@@ -1049,11 +1047,11 @@ Resources:
 
                       # Health Check Step 3: Test Direct NLB Access
                       echo "=== Health Check: Testing Direct NLB Connectivity ==="
-                      ALB_HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" -m 10 http://$CODER_LB_HOSTNAME/api/v2/buildinfo)
-                      echo "NLB Health Check Response: $ALB_HEALTH_CHECK"
+                      NLB_HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" -m 10 http://$CODER_LB_HOSTNAME/api/v2/buildinfo)
+                      echo "NLB Health Check Response: $NLB_HEALTH_CHECK"
                       
-                      if [ "$ALB_HEALTH_CHECK" != "200" ]; then
-                        echo "WARNING: NLB health check failed with status $ALB_HEALTH_CHECK"
+                      if [ "$NLB_HEALTH_CHECK" != "200" ]; then
+                        echo "WARNING: NLB health check failed with status $NLB_HEALTH_CHECK"
                       else
                         echo "SUCCESS: NLB is responding correctly"
                       fi
@@ -1087,8 +1085,7 @@ Resources:
                             --first-user-email $CoderAdminEmail \
                             --first-user-username $CoderAdminUser \
                             --first-user-password "$CoderAdminPassword" \
-                            --first-user-full-name "$CoderAdminName" \
-                            --first-user-trial=$CoderPremiumTrial; then
+                            --first-user-full-name "$CoderAdminName"; then
                             LOGIN_SUCCESS=true
                             echo "Coder login successful"
                             break
@@ -1106,6 +1103,11 @@ Resources:
                           --secret-id "$CoderSessionTokenSecretArn" \
                           --secret-string "$CODER_SESSION_TOKEN"
                         echo "Session token stored in Secrets Manager" 
+
+                        #Add Premium License Key, if passed in
+                        if [ -n "$CoderLicenseKey" ]; then
+                          coder licenses add -l "$CoderLicenseKey"
+                        fi
                       else
                         # Create a session token for template deployment
                         CODER_SESSION_TOKEN=$(aws secretsmanager get-secret-value --secret-id partner-coder-session-token --query SecretString --output text)
