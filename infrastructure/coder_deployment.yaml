@@ -263,6 +263,14 @@ Resources:
                   - iam:UntagOpenIDConnectProvider
                   - iam:AddClientIDToOpenIDConnectProvider
                   - iam:UpdateOpenIDConnectProviderThumbprint
+                  - iam:CreateUser
+                  - iam:GetUser
+                  - iam:DeleteUser
+                  - iam:TagUser
+                  - iam:CreateServiceSpecificCredential
+                  - iam:ListServiceSpecificCredentials
+                  - iam:DeleteServiceSpecificCredential
+                  - iam:UpdateServiceSpecificCredential
                 Resource: "*"
               # Deny modification of AWS managed and workshop roles
               - Effect: Deny
@@ -339,6 +347,44 @@ Resources:
       InstanceProfileName: !Sub "coder-workshop-ec2-workspace-profile"
       Roles:
         - !Ref WorkshopCoderRole
+
+  BedrockApiKeyUser:
+    Type: AWS::IAM::User
+    DependsOn: WorkshopCoderRole
+    Properties:
+      UserName: !Sub 'coder-bedrock-api-key-user-${AWS::StackName}'
+      Policies:
+        - PolicyName: BedrockInvokeAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:Converse
+                  - bedrock:ConverseStream
+                Resource: '*'
+      Tags:
+        - Key: Purpose
+          Value: CoderAIGatewayBedrockMantleKey
+        - Key: ManagedBy
+          Value: !Ref AWS::StackName
+
+  BedrockMantleApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'coder-bedrock-mantle-api-key-${AWS::StackName}'
+      Description: !Sub >-
+        Bedrock Mantle ServiceCredentialSecret for Coder AI Gateway openai-compat provider.
+        IAM user: coder-bedrock-api-key-user-${AWS::StackName}.
+        Populated by CodeBuild post_build.
+      SecretString: 'PENDING_CODEBUILD_POPULATION'
+      Tags:
+        - Key: Purpose
+          Value: CoderAIGatewayBedrockMantleKey
+        - Key: ManagedBy
+          Value: !Ref AWS::StackName
 
   FargatePodExecutionRole:
     Type: AWS::IAM::Role
@@ -803,6 +849,8 @@ Resources:
             Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-kiro-cli:latest'
           - Name: ChallengeImageUri
             Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-challenge:latest'
+          - Name: BEDROCK_MANTLE_SECRET_ARN
+            Value: !Ref BedrockMantleApiKeySecret
           
       Source:
         Type: NO_SOURCE
@@ -1108,6 +1156,81 @@ Resources:
                         if [ -n "$CoderLicenseKey" ]; then
                           coder licenses add -l "$CoderLicenseKey"
                         fi
+
+                        # ==============================================================
+                        # STEP: Create Bedrock service-specific credential and configure
+                        #       Coder AI providers via HTTP API.
+                        # Idempotent — safe on RetryFlag=True.
+                        # ==============================================================
+                        echo "=== Configuring Coder AI Providers ==="
+                        CODER_URL="${CODER_CLOUDFRONT_URL}"
+                        BEDROCK_ENDPOINT="https://bedrock-runtime.${AWSRegion}.amazonaws.com"
+                        BEDROCK_MANTLE_ENDPOINT="https://bedrock-mantle.${AWSRegion}.api.aws/v1"
+                        BEDROCK_USER="coder-bedrock-api-key-user-${STACK_NAME}"
+
+                        # 1. Create Bedrock service-specific credential (skip if already done)
+                        EXISTING_SECRET=$(aws secretsmanager get-secret-value \
+                          --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
+                          --region "${AWSRegion}" \
+                          --query SecretString --output text 2>/dev/null || echo "")
+
+                        if [ -z "${EXISTING_SECRET}" ] || [ "${EXISTING_SECRET}" = "PENDING_CODEBUILD_POPULATION" ]; then
+                          echo "Creating Bedrock service-specific credential for ${BEDROCK_USER}..."
+                          # Clean up any pre-existing credentials (max 2 allowed)
+                          for CRED_ID in $(aws iam list-service-specific-credentials \
+                            --user-name "${BEDROCK_USER}" \
+                            --service-name bedrock.amazonaws.com \
+                            --query 'ServiceSpecificCredentials[*].ServiceSpecificCredentialId' \
+                            --output text 2>/dev/null); do
+                            aws iam delete-service-specific-credential \
+                              --user-name "${BEDROCK_USER}" \
+                              --service-specific-credential-id "${CRED_ID}" 2>/dev/null || true
+                          done
+
+                          CRED_JSON=$(aws iam create-service-specific-credential \
+                            --user-name "${BEDROCK_USER}" \
+                            --service-name bedrock.amazonaws.com \
+                            --credential-age-days 30)
+                          BEDROCK_MANTLE_KEY=$(echo "${CRED_JSON}" | python3 -c \
+                            "import json,sys; print(json.load(sys.stdin)['ServiceSpecificCredential']['ServiceCredentialSecret'])")
+                          aws secretsmanager put-secret-value \
+                            --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
+                            --secret-string "${BEDROCK_MANTLE_KEY}" \
+                            --region "${AWSRegion}"
+                          echo "ServiceCredentialSecret stored in Secrets Manager."
+                        else
+                          echo "Bedrock Mantle secret already populated; reusing."
+                          BEDROCK_MANTLE_KEY="${EXISTING_SECRET}"
+                        fi
+
+                        # 2. Configure AWS Bedrock native provider (IAM/SigV4)
+                        echo "Configuring AWS Bedrock (native) provider..."
+                        curl -sf -X POST \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/v2/ai/providers" \
+                          -d "{\"type\":\"bedrock\",\"name\":\"bedrock\",\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-sonnet-4-6\",\"region\":\"${AWSRegion}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}" \
+                          || curl -sf -X PATCH \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/v2/ai/providers/bedrock" \
+                          -d "{\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-sonnet-4-6\",\"region\":\"${AWSRegion}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}"
+                        echo "Bedrock (native) provider configured."
+
+                        # 3. Configure OpenAI-compat provider via Bedrock Mantle
+                        echo "Configuring OpenAI-compat Bedrock Mantle provider..."
+                        curl -sf -X POST \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/v2/ai/providers" \
+                          -d "{\"type\":\"openai\",\"name\":\"openai-compat\",\"display_name\":\"OpenAI via AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_MANTLE_ENDPOINT}\",\"api_keys\":[\"${BEDROCK_MANTLE_KEY}\"]}" \
+                          || curl -sf -X PATCH \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/v2/ai/providers/openai-compat" \
+                          -d "{\"display_name\":\"OpenAI via AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_MANTLE_ENDPOINT}\",\"api_keys\":[\"${BEDROCK_MANTLE_KEY}\"]}"
+                        echo "OpenAI-compat Bedrock Mantle provider configured."
+                        echo "=== AI Provider Configuration Complete ==="
                       else
                         # Create a session token for template deployment
                         CODER_SESSION_TOKEN=$(aws secretsmanager get-secret-value --secret-id partner-coder-session-token --query SecretString --output text)
@@ -1362,3 +1485,11 @@ Outputs:
   ChallengeImageUri:
     Description: ECR URI for Challenge workspace image
     Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-challenge:latest'
+
+  BedrockMantleApiKeySecretArn:
+    Description: ARN of the Bedrock Mantle API key secret (ServiceCredentialSecret)
+    Value: !Ref BedrockMantleApiKeySecret
+
+  BedrockApiKeyUserName:
+    Description: IAM user that owns the Bedrock service-specific credential
+    Value: !Ref BedrockApiKeyUser
