@@ -365,6 +365,10 @@ Resources:
                   - bedrock:Converse
                   - bedrock:ConverseStream
                 Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock-mantle:*
+                Resource: '*'
       Tags:
         - Key: Purpose
           Value: CoderAIGatewayBedrockMantleKey
@@ -1164,14 +1168,15 @@ Resources:
                         # ==============================================================
                         echo "=== Configuring Coder AI Providers ==="
                         CODER_URL="${CODER_CLOUDFRONT_URL}"
-                        BEDROCK_ENDPOINT="https://bedrock-runtime.${AWSRegion}.amazonaws.com"
-                        BEDROCK_MANTLE_ENDPOINT="https://bedrock-mantle.${AWSRegion}.api.aws/v1"
+                        BEDROCK_REGION="us-east-1"  # Anthropic inference profiles available in us-east-1
+                        BEDROCK_ENDPOINT="https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com"
+                        BEDROCK_MANTLE_ENDPOINT="https://bedrock-mantle.${BEDROCK_REGION}.api.aws/v1"
                         BEDROCK_USER="coder-bedrock-api-key-user-${STACK_NAME}"
 
                         # 1. Create Bedrock service-specific credential (skip if already done)
                         EXISTING_SECRET=$(aws secretsmanager get-secret-value \
                           --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
-                          --region "${AWSRegion}" \
+                          --region "${BEDROCK_REGION}" \
                           --query SecretString --output text 2>/dev/null || echo "")
 
                         if [ -z "${EXISTING_SECRET}" ] || [ "${EXISTING_SECRET}" = "PENDING_CODEBUILD_POPULATION" ]; then
@@ -1196,7 +1201,7 @@ Resources:
                           aws secretsmanager put-secret-value \
                             --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
                             --secret-string "${BEDROCK_MANTLE_KEY}" \
-                            --region "${AWSRegion}"
+                            --region "${BEDROCK_REGION}"
                           echo "ServiceCredentialSecret stored in Secrets Manager."
                         else
                           echo "Bedrock Mantle secret already populated; reusing."
@@ -1209,12 +1214,12 @@ Resources:
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
                           -H "Content-Type: application/json" \
                           "${CODER_URL}/api/v2/ai/providers" \
-                          -d "{\"type\":\"bedrock\",\"name\":\"bedrock\",\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-sonnet-4-6\",\"region\":\"${AWSRegion}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}" \
+                          -d "{\"type\":\"bedrock\",\"name\":\"bedrock\",\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-8\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}" \
                           || curl -sf -X PATCH \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
                           -H "Content-Type: application/json" \
                           "${CODER_URL}/api/v2/ai/providers/bedrock" \
-                          -d "{\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-sonnet-4-6\",\"region\":\"${AWSRegion}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}"
+                          -d "{\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-8\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}"
                         echo "Bedrock (native) provider configured."
 
                         # 3. Configure OpenAI-compat provider via Bedrock Mantle
@@ -1230,6 +1235,117 @@ Resources:
                           "${CODER_URL}/api/v2/ai/providers/openai-compat" \
                           -d "{\"display_name\":\"OpenAI via AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_MANTLE_ENDPOINT}\",\"api_keys\":[\"${BEDROCK_MANTLE_KEY}\"]}"
                         echo "OpenAI-compat Bedrock Mantle provider configured."
+
+                        # 4. Configure Chat Model Configs for each provider
+                        echo "Configuring Chat Model Configs..."
+
+                        # Get the Bedrock provider ID
+                        BEDROCK_PROVIDER_ID=$(curl -sf \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          "${CODER_URL}/api/v2/ai/providers/bedrock" \
+                          | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+                        echo "Bedrock provider ID: ${BEDROCK_PROVIDER_ID}"
+
+                        # Get the OpenAI-compat provider ID
+                        OPENAI_PROVIDER_ID=$(curl -sf \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          "${CODER_URL}/api/v2/ai/providers/openai-compat" \
+                          | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+                        echo "OpenAI-compat provider ID: ${OPENAI_PROVIDER_ID}"
+
+                        # --- Bedrock Models (Anthropic via cross-region inference) ---
+                        # Note: Bedrock provider only supports two models (primary + small_fast).
+                        # Primary: Claude Opus 4.8 | Small/Fast: Claude Haiku 4.5
+
+                        # Claude Opus 4.8 (primary model)
+                        echo "Adding model: Claude Opus 4.8 (Bedrock)..."
+                        curl -sf -X POST \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/experimental/chats/model-configs" \
+                          -d "{
+                            \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
+                            \"model\": \"global.anthropic.claude-opus-4-8\",
+                            \"display_name\": \"Claude Opus 4.8\",
+                            \"enabled\": true,
+                            \"is_default\": true,
+                            \"context_limit\": 1000000,
+                            \"model_config\": {
+                              \"max_output_tokens\": 128000,
+                              \"provider_options\": {
+                                \"anthropic\": {
+                                  \"send_reasoning\": true,
+                                  \"effort\": \"high\"
+                                }
+                              }
+                            }
+                          }" || echo "  (may already exist)"
+
+                        # Claude Haiku 4.5 (fast model)
+                        echo "Adding model: Claude Haiku 4.5 (Bedrock)..."
+                        curl -sf -X POST \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/experimental/chats/model-configs" \
+                          -d "{
+                            \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
+                            \"model\": \"global.anthropic.claude-haiku-4-5-20251001-v1:0\",
+                            \"display_name\": \"Claude Haiku 4.5\",
+                            \"enabled\": true,
+                            \"is_default\": false,
+                            \"context_limit\": 200000,
+                            \"model_config\": {
+                              \"max_output_tokens\": 64000,
+                              \"provider_options\": {
+                                \"anthropic\": {
+                                  \"send_reasoning\": true,
+                                  \"thinking\": {
+                                    \"budget_tokens\": 8192
+                                  }
+                                }
+                              }
+                            }
+                          }" || echo "  (may already exist)"
+
+                        # --- OpenAI-Compat Models (Mistral via Bedrock Mantle) ---
+
+                        # Mistral Large 3 via OpenAI-compat (best overall results)
+                        echo "Adding model: Mistral Large 3 (OpenAI-compat)..."
+                        curl -sf -X POST \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/experimental/chats/model-configs" \
+                          -d "{
+                            \"ai_provider_id\": \"${OPENAI_PROVIDER_ID}\",
+                            \"model\": \"mistral.mistral-large-3-675b-instruct\",
+                            \"display_name\": \"Mistral Large 3\",
+                            \"enabled\": true,
+                            \"is_default\": false,
+                            \"context_limit\": 128000,
+                            \"model_config\": {
+                              \"max_output_tokens\": 8192
+                            }
+                          }" || echo "  (may already exist)"
+
+                        # Devstral 2 via OpenAI-compat (cost/performance, coding-optimized)
+                        echo "Adding model: Devstral 2 (OpenAI-compat)..."
+                        curl -sf -X POST \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/experimental/chats/model-configs" \
+                          -d "{
+                            \"ai_provider_id\": \"${OPENAI_PROVIDER_ID}\",
+                            \"model\": \"mistral.devstral-2-123b\",
+                            \"display_name\": \"Devstral 2 123B\",
+                            \"enabled\": true,
+                            \"is_default\": false,
+                            \"context_limit\": 128000,
+                            \"model_config\": {
+                              \"max_output_tokens\": 8192
+                            }
+                          }" || echo "  (may already exist)"
+
+                        echo "Chat Model Configs configured successfully."
                         echo "=== AI Provider Configuration Complete ==="
                       else
                         # Create a session token for template deployment

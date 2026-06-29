@@ -29,10 +29,10 @@ coder:
     value: "false"
 
 # Enable Workshop Self-Registration via Github
-  - name: CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS
-    value: "true"
-  - name: CODER_OAUTH2_GITHUB_ALLOW_EVERYONE
-    value: "true"
+#  - name: CODER_OAUTH2_GITHUB_ALLOW_SIGNUPS
+#    value: "true"
+#  - name: CODER_OAUTH2_GITHUB_ALLOW_EVERYONE
+#    value: "true"
 
 # OIDC/SSO configuration
 #  - name: CODER_OIDC_ISSUER_URL
@@ -108,7 +108,19 @@ coder:
   #podAnnotations:
   #  prometheus.io/port: "2112"
   #  prometheus.io/scrape: "true"
-  
+
+  # ---------------------------------------------------------------------
+  # AI Gateway (formerly "AI Bridge") + Coder Agents + Tracing
+  # ---------------------------------------------------------------------
+  # AI Gateway is enabled by default in v2.34
+  # Coder Agents (the in-control-plane agent loop) is available once AI
+  # Gateway is enabled and at least one provider is configured.
+  - name: CODER_TRACE_ENABLE
+    value: "true"
+  # Hide the "Tasks" tab in the dashboard
+  - name: CODER_HIDE_AI_TASKS
+    value: "true"
+
   # Enable HA for Coderd
   replicaCount: 1
 
