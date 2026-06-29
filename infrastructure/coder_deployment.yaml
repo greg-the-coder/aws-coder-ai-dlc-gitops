@@ -1255,7 +1255,31 @@ Resources:
 
                         # --- Bedrock Models (Anthropic via cross-region inference) ---
                         # Note: Bedrock provider only supports two models (primary + small_fast).
-                        # Only registering Haiku here; Sonnet is the primary in provider settings.
+                        # Primary: Claude Opus 4.8 | Small/Fast: Claude Haiku 4.5
+
+                        # Claude Opus 4.8 (primary model)
+                        echo "Adding model: Claude Opus 4.8 (Bedrock)..."
+                        curl -sf -X POST \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/experimental/chats/model-configs" \
+                          -d "{
+                            \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
+                            \"model\": \"global.anthropic.claude-opus-4-8\",
+                            \"display_name\": \"Claude Opus 4.8\",
+                            \"enabled\": true,
+                            \"is_default\": true,
+                            \"context_limit\": 1000000,
+                            \"model_config\": {
+                              \"max_output_tokens\": 128000,
+                              \"provider_options\": {
+                                \"anthropic\": {
+                                  \"send_reasoning\": true,
+                                  \"effort\": \"high\"
+                                }
+                              }
+                            }
+                          }" || echo "  (may already exist)"
 
                         # Claude Haiku 4.5 (fast model)
                         echo "Adding model: Claude Haiku 4.5 (Bedrock)..."
