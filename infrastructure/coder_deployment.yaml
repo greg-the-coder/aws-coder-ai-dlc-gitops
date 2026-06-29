@@ -1230,6 +1230,139 @@ Resources:
                           "${CODER_URL}/api/v2/ai/providers/openai-compat" \
                           -d "{\"display_name\":\"OpenAI via AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_MANTLE_ENDPOINT}\",\"api_keys\":[\"${BEDROCK_MANTLE_KEY}\"]}"
                         echo "OpenAI-compat Bedrock Mantle provider configured."
+
+                        # 4. Configure Chat Model Configs for each provider
+                        echo "Configuring Chat Model Configs..."
+
+                        # Get the Bedrock provider ID
+                        BEDROCK_PROVIDER_ID=$(curl -sf \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          "${CODER_URL}/api/v2/ai/providers/bedrock" \
+                          | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+                        echo "Bedrock provider ID: ${BEDROCK_PROVIDER_ID}"
+
+                        # Get the OpenAI-compat provider ID
+                        OPENAI_PROVIDER_ID=$(curl -sf \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          "${CODER_URL}/api/v2/ai/providers/openai-compat" \
+                          | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+                        echo "OpenAI-compat provider ID: ${OPENAI_PROVIDER_ID}"
+
+                        # --- Bedrock Models (Anthropic via cross-region inference) ---
+
+                        # Claude Opus 4.8 (latest Opus)
+                        echo "Adding model: Claude Opus 4.8 (Bedrock)..."
+                        curl -sf -X POST \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/experimental/chats/model-configs" \
+                          -d "{
+                            \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
+                            \"model\": \"global.anthropic.claude-opus-4-8-v1:0\",
+                            \"display_name\": \"Claude Opus 4.8\",
+                            \"enabled\": true,
+                            \"is_default\": true,
+                            \"context_limit\": 1000000,
+                            \"model_config\": {
+                              \"max_output_tokens\": 128000,
+                              \"provider_options\": {
+                                \"anthropic\": {
+                                  \"send_reasoning\": true,
+                                  \"effort\": \"high\"
+                                }
+                              }
+                            }
+                          }" || echo "  (may already exist)"
+
+                        # Claude Sonnet 4.6
+                        echo "Adding model: Claude Sonnet 4.6 (Bedrock)..."
+                        curl -sf -X POST \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/experimental/chats/model-configs" \
+                          -d "{
+                            \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
+                            \"model\": \"global.anthropic.claude-sonnet-4-6-v1:0\",
+                            \"display_name\": \"Claude Sonnet 4.6\",
+                            \"enabled\": true,
+                            \"is_default\": false,
+                            \"context_limit\": 1000000,
+                            \"model_config\": {
+                              \"max_output_tokens\": 64000,
+                              \"provider_options\": {
+                                \"anthropic\": {
+                                  \"send_reasoning\": true,
+                                  \"effort\": \"medium\"
+                                }
+                              }
+                            }
+                          }" || echo "  (may already exist)"
+
+                        # Claude Haiku 4.5
+                        echo "Adding model: Claude Haiku 4.5 (Bedrock)..."
+                        curl -sf -X POST \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/experimental/chats/model-configs" \
+                          -d "{
+                            \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
+                            \"model\": \"global.anthropic.claude-haiku-4-5-20251001-v1:0\",
+                            \"display_name\": \"Claude Haiku 4.5\",
+                            \"enabled\": true,
+                            \"is_default\": false,
+                            \"context_limit\": 200000,
+                            \"model_config\": {
+                              \"max_output_tokens\": 64000,
+                              \"provider_options\": {
+                                \"anthropic\": {
+                                  \"send_reasoning\": true,
+                                  \"thinking\": {
+                                    \"budget_tokens\": 8192
+                                  }
+                                }
+                              }
+                            }
+                          }" || echo "  (may already exist)"
+
+                        # --- OpenAI-Compat Models (Mistral via Bedrock Mantle) ---
+
+                        # Mistral Large 3 via OpenAI-compat (best overall results)
+                        echo "Adding model: Mistral Large 3 (OpenAI-compat)..."
+                        curl -sf -X POST \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/experimental/chats/model-configs" \
+                          -d "{
+                            \"ai_provider_id\": \"${OPENAI_PROVIDER_ID}\",
+                            \"model\": \"mistral.mistral-large-3-675b-instruct\",
+                            \"display_name\": \"Mistral Large 3\",
+                            \"enabled\": true,
+                            \"is_default\": false,
+                            \"context_limit\": 128000,
+                            \"model_config\": {
+                              \"max_output_tokens\": 8192
+                            }
+                          }" || echo "  (may already exist)"
+
+                        # Devstral 2 via OpenAI-compat (cost/performance, coding-optimized)
+                        echo "Adding model: Devstral 2 (OpenAI-compat)..."
+                        curl -sf -X POST \
+                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
+                          -H "Content-Type: application/json" \
+                          "${CODER_URL}/api/experimental/chats/model-configs" \
+                          -d "{
+                            \"ai_provider_id\": \"${OPENAI_PROVIDER_ID}\",
+                            \"model\": \"mistral.devstral-2-123b\",
+                            \"display_name\": \"Devstral 2 123B\",
+                            \"enabled\": true,
+                            \"is_default\": false,
+                            \"context_limit\": 128000,
+                            \"model_config\": {
+                              \"max_output_tokens\": 8192
+                            }
+                          }" || echo "  (may already exist)"
+
+                        echo "Chat Model Configs configured successfully."
                         echo "=== AI Provider Configuration Complete ==="
                       else
                         # Create a session token for template deployment
