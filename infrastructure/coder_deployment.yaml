@@ -365,6 +365,10 @@ Resources:
                   - bedrock:Converse
                   - bedrock:ConverseStream
                 Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock-mantle:*
+                Resource: '*'
       Tags:
         - Key: Purpose
           Value: CoderAIGatewayBedrockMantleKey
