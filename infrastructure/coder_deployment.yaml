@@ -1152,7 +1152,7 @@ Resources:
 
                         EXISTING_SECRET=$(aws secretsmanager get-secret-value \
                           --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
-                          --region "${BEDROCK_REGION}" \
+                          --region "${AWSRegion}" \
                           --query SecretString --output text 2>/dev/null || echo "")
 
                         if [ -z "${EXISTING_SECRET}" ] || [ "${EXISTING_SECRET}" = "PENDING_CODEBUILD_POPULATION" ]; then
@@ -1176,7 +1176,7 @@ Resources:
                           aws secretsmanager put-secret-value \
                             --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
                             --secret-string "${BEDROCK_MANTLE_KEY}" \
-                            --region "${BEDROCK_REGION}"
+                            --region "${AWSRegion}"
                           echo "ServiceCredentialSecret stored in Secrets Manager."
                         else
                           echo "Bedrock Mantle secret already populated; reusing."
