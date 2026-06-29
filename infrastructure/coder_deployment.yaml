@@ -1168,14 +1168,15 @@ Resources:
                         # ==============================================================
                         echo "=== Configuring Coder AI Providers ==="
                         CODER_URL="${CODER_CLOUDFRONT_URL}"
-                        BEDROCK_ENDPOINT="https://bedrock-runtime.${AWSRegion}.amazonaws.com"
-                        BEDROCK_MANTLE_ENDPOINT="https://bedrock-mantle.${AWSRegion}.api.aws/v1"
+                        BEDROCK_REGION="us-east-1"  # Anthropic inference profiles available in us-east-1
+                        BEDROCK_ENDPOINT="https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com"
+                        BEDROCK_MANTLE_ENDPOINT="https://bedrock-mantle.${BEDROCK_REGION}.api.aws/v1"
                         BEDROCK_USER="coder-bedrock-api-key-user-${STACK_NAME}"
 
                         # 1. Create Bedrock service-specific credential (skip if already done)
                         EXISTING_SECRET=$(aws secretsmanager get-secret-value \
                           --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
-                          --region "${AWSRegion}" \
+                          --region "${BEDROCK_REGION}" \
                           --query SecretString --output text 2>/dev/null || echo "")
 
                         if [ -z "${EXISTING_SECRET}" ] || [ "${EXISTING_SECRET}" = "PENDING_CODEBUILD_POPULATION" ]; then
@@ -1200,7 +1201,7 @@ Resources:
                           aws secretsmanager put-secret-value \
                             --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
                             --secret-string "${BEDROCK_MANTLE_KEY}" \
-                            --region "${AWSRegion}"
+                            --region "${BEDROCK_REGION}"
                           echo "ServiceCredentialSecret stored in Secrets Manager."
                         else
                           echo "Bedrock Mantle secret already populated; reusing."
@@ -1213,12 +1214,12 @@ Resources:
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
                           -H "Content-Type: application/json" \
                           "${CODER_URL}/api/v2/ai/providers" \
-                          -d "{\"type\":\"bedrock\",\"name\":\"bedrock\",\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-sonnet-4-6\",\"region\":\"${AWSRegion}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}" \
+                          -d "{\"type\":\"bedrock\",\"name\":\"bedrock\",\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-8\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}" \
                           || curl -sf -X PATCH \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
                           -H "Content-Type: application/json" \
                           "${CODER_URL}/api/v2/ai/providers/bedrock" \
-                          -d "{\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-sonnet-4-6\",\"region\":\"${AWSRegion}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}"
+                          -d "{\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-8\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}"
                         echo "Bedrock (native) provider configured."
 
                         # 3. Configure OpenAI-compat provider via Bedrock Mantle
