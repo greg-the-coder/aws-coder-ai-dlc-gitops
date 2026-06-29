@@ -1254,56 +1254,10 @@ Resources:
                         echo "OpenAI-compat provider ID: ${OPENAI_PROVIDER_ID}"
 
                         # --- Bedrock Models (Anthropic via cross-region inference) ---
+                        # Note: Bedrock provider only supports two models (primary + small_fast).
+                        # Only registering Haiku here; Sonnet is the primary in provider settings.
 
-                        # Claude Opus 4.8 (latest Opus)
-                        echo "Adding model: Claude Opus 4.8 (Bedrock)..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/experimental/chats/model-configs" \
-                          -d "{
-                            \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
-                            \"model\": \"global.anthropic.claude-opus-4-8\",
-                            \"display_name\": \"Claude Opus 4.8\",
-                            \"enabled\": true,
-                            \"is_default\": true,
-                            \"context_limit\": 1000000,
-                            \"model_config\": {
-                              \"max_output_tokens\": 128000,
-                              \"provider_options\": {
-                                \"anthropic\": {
-                                  \"send_reasoning\": true,
-                                  \"effort\": \"high\"
-                                }
-                              }
-                            }
-                          }" || echo "  (may already exist)"
-
-                        # Claude Sonnet 4.6
-                        echo "Adding model: Claude Sonnet 4.6 (Bedrock)..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/experimental/chats/model-configs" \
-                          -d "{
-                            \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
-                            \"model\": \"global.anthropic.claude-sonnet-4-6\",
-                            \"display_name\": \"Claude Sonnet 4.6\",
-                            \"enabled\": true,
-                            \"is_default\": false,
-                            \"context_limit\": 1000000,
-                            \"model_config\": {
-                              \"max_output_tokens\": 64000,
-                              \"provider_options\": {
-                                \"anthropic\": {
-                                  \"send_reasoning\": true,
-                                  \"effort\": \"medium\"
-                                }
-                              }
-                            }
-                          }" || echo "  (may already exist)"
-
-                        # Claude Haiku 4.5
+                        # Claude Haiku 4.5 (fast model)
                         echo "Adding model: Claude Haiku 4.5 (Bedrock)..."
                         curl -sf -X POST \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
