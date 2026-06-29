@@ -879,7 +879,6 @@ Resources:
                     region: ${AWSRegion}
                     version: "${KubernetesVersion}"
                   
-                  # Proper Auto Mode configuration as per AWS docs
                   autoModeConfig:
                     enabled: true
                   
@@ -946,7 +945,6 @@ Resources:
                     
                     aws eks update-kubeconfig --region ${AWSRegion} --name ${EKSClusterName}
                     
-                    # Install CoreDNS addon (required for DNS, cannot be in eksctl config with Auto Mode)
                     aws eks create-addon --cluster-name ${EKSClusterName} --addon-name coredns --region ${AWSRegion} || true
                     echo "Waiting for CoreDNS addon to become ACTIVE..."
                     aws eks wait addon-active --cluster-name ${EKSClusterName} --addon-name coredns --region ${AWSRegion} || true
@@ -954,7 +952,6 @@ Resources:
                     ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
                     PARTICIPANT_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/WSParticipantRole"
                     
-                    # Clone GitOps repo early for K8s manifest and config files
                     git clone $CoderGitOpsTemplateRepoURL
                     CODER_GITOPS_DIR=$(basename "$CoderGitOpsTemplateRepoURL" .git)
 
@@ -971,7 +968,6 @@ Resources:
                       
                       kubectl create namespace coder-ws
                       
-                      # Grant coder SA in coder namespace permissions to manage resources in coder-ws
                       kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/coder-workspace-rbac.yaml"
                       kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/efs-storageclass.yaml"
                       
@@ -1012,7 +1008,6 @@ Resources:
                       --service-account coder \
                       --role-arn arn:aws:iam::$ACCOUNT_ID:role/coder-and-aws-workshop-user
 
-                      # Setup IRSA for coder-ws namespace (Pod Identity doesn't work on Fargate)
                       echo "Configuring IRSA for Fargate workspace pods..."
                       
                       chmod +x "$CODER_GITOPS_DIR/infrastructure/scripts/irsa-trust-policy-update.sh"
@@ -1022,22 +1017,18 @@ Resources:
                         "coder-ws" \
                         "coder-ws"
                       
-                      # Create the coder-ws service account with IRSA annotation
                       sed "s|PLACEHOLDER_ROLE_ARN|arn:aws:iam::${ACCOUNT_ID}:role/coder-and-aws-workshop-user|g" "$CODER_GITOPS_DIR/infrastructure/k8s/coder-ws-serviceaccount.yaml" \
                         | kubectl apply -f -
                       echo "Created coder-ws service account with IRSA annotation"
                     fi
 
                     if [ -n "$CODER_LB_HOSTNAME" ]; then
-                      # Update the CloudFront distribution origin with the actual NLB hostname
                       echo "Updating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID with origin $CODER_LB_HOSTNAME"
 
-                      # Get the current distribution config and ETag
                       CF_CONFIG=$(aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID")
                       ETAG=$(echo "$CF_CONFIG" | jq -r '.ETag')
                       DIST_CONFIG=$(echo "$CF_CONFIG" | jq '.DistributionConfig')
 
-                      # Replace the placeholder origin with the actual NLB hostname
                       UPDATED_CONFIG=$(echo "$DIST_CONFIG" | jq --arg hostname "$CODER_LB_HOSTNAME" \
                         '.Origins.Items[0].DomainName = $hostname')
 
@@ -1053,7 +1044,6 @@ Resources:
                       echo "CloudFront Distribution ID: $DISTRIBUTION_ID"
                       echo "CloudFront Domain: $CLOUDFRONT_DOMAIN"
 
-                      # Check deployment status
                       echo "Waiting for CloudFront distribution to deploy..."
                       while true; do
                         STATUS=$(aws cloudfront get-distribution --id $DISTRIBUTION_ID --query 'Distribution.Status' --output text)
@@ -1066,7 +1056,6 @@ Resources:
                         sleep 60
                       done
 
-                      # Construct the new URLs
                       CODER_CLOUDFRONT_URL="https://$CLOUDFRONT_DOMAIN"
                       CODER_CLOUDFRONT_WILDCARD="*.$CLOUDFRONT_DOMAIN"
 
@@ -1085,7 +1074,6 @@ Resources:
                         sleep 3
                       done
 
-                      # Health Check Step 2: Check Coder Pod Status
                       echo "=== Health Check: Verifying Coder Pod Status ==="
                       kubectl get pods -n coder -o wide
                       POD_STATUS=$(kubectl get pods -n coder -o jsonpath='{.items[0].status.phase}')
@@ -1097,7 +1085,6 @@ Resources:
                         kubectl describe pod -n coder $(kubectl get pods -n coder -o jsonpath='{.items[0].metadata.name}')
                       fi
 
-                      # Health Check Step 3: Test Direct NLB Access
                       echo "=== Health Check: Testing Direct NLB Connectivity ==="
                       NLB_HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" -m 10 http://$CODER_LB_HOSTNAME/api/v2/buildinfo)
                       echo "NLB Health Check Response: $NLB_HEALTH_CHECK"
@@ -1108,7 +1095,6 @@ Resources:
                         echo "SUCCESS: NLB is responding correctly"
                       fi
 
-                      # Health Check Step 4: Test CloudFront Access
                       echo "=== Health Check: Testing CloudFront Connectivity ==="
                       CF_HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" -m 10 $CODER_CLOUDFRONT_URL/api/v2/buildinfo)
                       echo "CloudFront Health Check Response: $CF_HEALTH_CHECK"
@@ -1128,7 +1114,6 @@ Resources:
                       cd $CODER_GITOPS_DIR/templates 
 
                       if [ "$RetryFlag" != "True" ]; then
-                        #Perform initial Coder Login and create initial admin user
                         echo "Creating initial Coder Administrator User"
                         LOGIN_SUCCESS=false
                         for attempt in {1..10}; do
@@ -1146,26 +1131,18 @@ Resources:
                           sleep $((attempt * 15))
                         done
 
-                        # Create a session token for template deployment
                         CODER_SESSION_TOKEN=$(coder tokens create --lifetime 120)
                         echo "Session token created successfully"
 
-                        # Store token in Secrets Manager
                         aws secretsmanager put-secret-value \
                           --secret-id "$CoderSessionTokenSecretArn" \
                           --secret-string "$CODER_SESSION_TOKEN"
                         echo "Session token stored in Secrets Manager" 
 
-                        #Add Premium License Key, if passed in
                         if [ -n "$CoderLicenseKey" ]; then
                           coder licenses add -l "$CoderLicenseKey"
                         fi
 
-                        # ==============================================================
-                        # STEP: Create Bedrock service-specific credential and configure
-                        #       Coder AI providers via HTTP API.
-                        # Idempotent — safe on RetryFlag=True.
-                        # ==============================================================
                         echo "=== Configuring Coder AI Providers ==="
                         CODER_URL="${CODER_CLOUDFRONT_URL}"
                         BEDROCK_REGION="us-east-1"  # Anthropic inference profiles available in us-east-1
@@ -1173,7 +1150,6 @@ Resources:
                         BEDROCK_MANTLE_ENDPOINT="https://bedrock-mantle.${BEDROCK_REGION}.api.aws/v1"
                         BEDROCK_USER="coder-bedrock-api-key-user-${STACK_NAME}"
 
-                        # 1. Create Bedrock service-specific credential (skip if already done)
                         EXISTING_SECRET=$(aws secretsmanager get-secret-value \
                           --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
                           --region "${BEDROCK_REGION}" \
@@ -1181,7 +1157,6 @@ Resources:
 
                         if [ -z "${EXISTING_SECRET}" ] || [ "${EXISTING_SECRET}" = "PENDING_CODEBUILD_POPULATION" ]; then
                           echo "Creating Bedrock service-specific credential for ${BEDROCK_USER}..."
-                          # Clean up any pre-existing credentials (max 2 allowed)
                           for CRED_ID in $(aws iam list-service-specific-credentials \
                             --user-name "${BEDROCK_USER}" \
                             --service-name bedrock.amazonaws.com \
@@ -1208,7 +1183,6 @@ Resources:
                           BEDROCK_MANTLE_KEY="${EXISTING_SECRET}"
                         fi
 
-                        # 2. Configure AWS Bedrock native provider (IAM/SigV4)
                         echo "Configuring AWS Bedrock (native) provider..."
                         curl -sf -X POST \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
@@ -1222,7 +1196,6 @@ Resources:
                           -d "{\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-8\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}"
                         echo "Bedrock (native) provider configured."
 
-                        # 3. Configure OpenAI-compat provider via Bedrock Mantle
                         echo "Configuring OpenAI-compat Bedrock Mantle provider..."
                         curl -sf -X POST \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
@@ -1236,28 +1209,21 @@ Resources:
                           -d "{\"display_name\":\"OpenAI via AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_MANTLE_ENDPOINT}\",\"api_keys\":[\"${BEDROCK_MANTLE_KEY}\"]}"
                         echo "OpenAI-compat Bedrock Mantle provider configured."
 
-                        # 4. Configure Chat Model Configs for each provider
                         echo "Configuring Chat Model Configs..."
 
-                        # Get the Bedrock provider ID
                         BEDROCK_PROVIDER_ID=$(curl -sf \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
                           "${CODER_URL}/api/v2/ai/providers/bedrock" \
                           | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
                         echo "Bedrock provider ID: ${BEDROCK_PROVIDER_ID}"
 
-                        # Get the OpenAI-compat provider ID
                         OPENAI_PROVIDER_ID=$(curl -sf \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
                           "${CODER_URL}/api/v2/ai/providers/openai-compat" \
                           | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
                         echo "OpenAI-compat provider ID: ${OPENAI_PROVIDER_ID}"
 
-                        # --- Bedrock Models (Anthropic via cross-region inference) ---
-                        # Note: Bedrock provider only supports two models (primary + small_fast).
-                        # Primary: Claude Opus 4.8 | Small/Fast: Claude Haiku 4.5
 
-                        # Claude Opus 4.8 (primary model)
                         echo "Adding model: Claude Opus 4.8 (Bedrock)..."
                         curl -sf -X POST \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
@@ -1281,7 +1247,6 @@ Resources:
                             }
                           }" || echo "  (may already exist)"
 
-                        # Claude Haiku 4.5 (fast model)
                         echo "Adding model: Claude Haiku 4.5 (Bedrock)..."
                         curl -sf -X POST \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
@@ -1307,9 +1272,7 @@ Resources:
                             }
                           }" || echo "  (may already exist)"
 
-                        # --- OpenAI-Compat Models (Mistral via Bedrock Mantle) ---
 
-                        # Mistral Large 3 via OpenAI-compat (best overall results)
                         echo "Adding model: Mistral Large 3 (OpenAI-compat)..."
                         curl -sf -X POST \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
@@ -1327,7 +1290,6 @@ Resources:
                             }
                           }" || echo "  (may already exist)"
 
-                        # Devstral 2 via OpenAI-compat (cost/performance, coding-optimized)
                         echo "Adding model: Devstral 2 (OpenAI-compat)..."
                         curl -sf -X POST \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
@@ -1348,7 +1310,6 @@ Resources:
                         echo "Chat Model Configs configured successfully."
                         echo "=== AI Provider Configuration Complete ==="
                       else
-                        # Create a session token for template deployment
                         CODER_SESSION_TOKEN=$(aws secretsmanager get-secret-value --secret-id partner-coder-session-token --query SecretString --output text)
                         echo "Session token received successfully"
                         
@@ -1361,13 +1322,10 @@ Resources:
                       fi
 
                       echo "Deploying GitOps templates via Terraform: $CODER_AGENT_URL"
-                      # Ensure AWS credentials are available to Terraform
-                      # CodeBuild provides credentials via AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
                       if [ -n "$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" ]; then
                         export AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
                       fi
 
-                      # Also export standard credential variables if they exist
                       if [ -n "$AWS_ACCESS_KEY_ID" ]; then
                         export AWS_ACCESS_KEY_ID
                         export AWS_SECRET_ACCESS_KEY
@@ -1377,13 +1335,11 @@ Resources:
                       export AWS_DEFAULT_REGION="$AWSRegion"
                       export AWS_REGION="$AWSRegion"
 
-                      # Verify credentials work
                       echo "Testing AWS credentials..."
                       aws sts get-caller-identity
 
                       terraform init
 
-                      # Additional wait for Coder API to be fully responsive
                       sleep 120
 
                       ./templates_gitops.sh $CODER_SESSION_TOKEN
