@@ -1,62 +1,49 @@
 ---
-display_name: Kubernetes with Claude Code
-description: Provision Kubernetes Deployments with Claude Code AI assistant as Coder workspaces
+display_name: AWS Workshop - Kubernetes with Claude Code
+description: Fargate workspace with the Claude Code AI assistant and task automation, AWS CLI/CDK, Node.js, and Amazon Bedrock access.
 icon: ../../../site/static/icon/k8s.png
 maintainer_github: coder
 verified: true
-tags: [kubernetes, container, ai, claude]
+tags: [kubernetes, fargate, ai, claude, claude-code, bedrock, task-automation]
 ---
 
-# Remote Development on Kubernetes Pods with Claude Code
+# Kubernetes with Claude Code
 
-Provision Kubernetes Pods with integrated Claude Code AI assistant as [Coder workspaces](https://coder.com/docs/workspaces) with this example template.
+A serverless Coder workspace running on **AWS Fargate** with the
+[Claude Code](https://coder.com/docs/claude-code) AI assistant. The home directory is
+persisted on **Amazon EFS** so work survives workspace restarts.
 
-<!-- TODO: Add screenshot -->
+## Capabilities
 
-## Prerequisites
+### AI assistant
+- **Claude Code** CLI (`@anthropic-ai/claude-code`) with **task automation** and task
+  reporting back to Coder (`report_tasks = true`)
+- **Amazon Bedrock** integration — defaults to Claude Opus 4.8
+  (`global.anthropic.claude-opus-4-8`) via the workspace IAM role
 
-### Infrastructure
+### Developer environment
+- **code-server** (VS Code in the browser) and **Kiro IDE** web app
+- Web terminal
+- Node.js 20 LTS, AWS CLI v2, AWS CDK
+- Playwright (headless Chromium) for web access
+- Python 3
 
-**Cluster**: This template requires an existing Kubernetes cluster
-
-**Container Image**: This template uses the [codercom/enterprise-base:ubuntu image](https://github.com/coder/enterprise-images/tree/main/images/base) with some dev tools preinstalled. To add additional tools, extend this image or build it yourself.
-
-### Authentication
-
-This template authenticates using a `~/.kube/config`, if present on the server, or via built-in authentication if the Coder provisioner is running on Kubernetes with an authorized ServiceAccount. To use another [authentication method](https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs#authentication), edit the template.
-
-### Claude Code Integration
-
-This template includes Claude Code AI assistant integration that provides:
-- AI-powered code generation and assistance
-- Task automation based on user prompts
-- Integration with AWS Bedrock for Claude models
-- Automatic task reporting to Coder
-
-## Architecture
-
-This template provisions the following resources:
-
-- Kubernetes pod (ephemeral)
-- Kubernetes persistent volume claim (persistent on `/home/coder`)
-- Claude Code AI assistant with task automation
-
-This means, when the workspace restarts, any tools or files outside of the home directory are not persisted. To pre-bake tools into the workspace (e.g. `python3`), modify the container image. Alternatively, individual developers can [personalize](https://coder.com/docs/dotfiles) their workspaces with dotfiles.
-
-## Features
-
-- **VS Code Web**: Access VS Code through the browser
-- **Kiro**: AI-powered code editor integration
-- **Claude Code**: AI assistant for automated development tasks
-- **Preview App**: Built-in preview server on port 3000
-- **Configurable Resources**: Adjustable CPU, memory, and disk size
+## Runtime & infrastructure
+- **Compute:** AWS Fargate (namespace `coder-ws`), no EC2 worker nodes
+- **Storage:** Amazon EFS access point mounted at `/home/coder` (`ReadWriteMany`, persistent)
+- **Image:** [`images/coder-workspace-claude-code/Dockerfile`](../../images/coder-workspace-claude-code/Dockerfile)
 
 ## Parameters
 
-- **CPU**: Number of CPU cores (2 or 4)
-- **Memory**: Amount of memory in GB (2 or 4)
-- **Home Disk Size**: Size of persistent home directory in GB
-- **AI Prompt**: Task prompt for Claude Code assistant
+| Parameter | Default | Range |
+|-----------|---------|-------|
+| CPU cores | 4 | 2–8 |
+| Memory (GB) | 8 | 4–16 |
 
-> **Note**
-> This template is designed to be a starting point! Edit the Terraform to extend the template to support your use case.
+Storage is provisioned automatically via EFS; there is no disk-size parameter.
+
+## Notes
+- Tools installed outside `/home/coder` are part of the container image; rebuild the image to
+  add system packages. Files under `/home/coder` persist across restarts.
+- For Coder Agents, the [`awshp-k8s-challenge-agent`](../awshp-k8s-challenge-agent) template
+  is the environment optimized for agentic use.
