@@ -1,75 +1,54 @@
-# Kubernetes Workspace with Kiro CLI
+---
+display_name: AWS Workshop - Kubernetes with Kiro CLI
+description: Fargate workspace with the Kiro CLI AI assistant, AWS CLI/CDK, Node.js, Nirmata CLI, and Amazon Bedrock access.
+icon: ../../../site/static/icon/k8s.png
+maintainer_github: coder
+verified: true
+tags: [kubernetes, fargate, ai, kiro, kiro-cli, bedrock, mcp]
+---
 
-This Coder template deploys a Kubernetes-based development workspace with the Kiro CLI pre-installed, along with AWS utilities for cloud development.
+# Kubernetes with Kiro CLI
 
-## Features
+A serverless Coder workspace running on **AWS Fargate** with the
+[Kiro CLI](https://kiro.dev/docs) AI assistant. The home directory is persisted on
+**Amazon EFS** so installed tools and work survive workspace restarts.
 
-- **Kiro CLI**: AI-powered development assistant accessible via command line
-- **AWS CLI**: Command-line interface for AWS services (installed to persistent storage)
-- **AWS CDK**: Infrastructure as Code toolkit for AWS (installed to persistent storage)
-- **code-server**: VS Code in the browser
-- **Kiro IDE**: Kiro IDE interface
-- **Persistent Storage**: Home directory persists across workspace restarts, including all installed tools
+## Capabilities
 
-## What's Included
+### AI assistant
+- **Kiro CLI** (`kiro-cli`, `kiro-cli-chat`) for interactive, command-line AI development
+- **Kiro IDE** web app
+- **MCP** (Model Context Protocol) support — pre-seeded `~/.kiro/settings/mcp.json`
+- **Amazon Bedrock** access via the workspace IAM role
 
-### Pre-installed Tools (Persistent)
-All tools are installed to `/home/coder` which is backed by a persistent volume, ensuring they survive pod restarts:
+### Developer environment
+- **code-server** (VS Code in the browser)
+- One-click **Kiro CLI** authentication app (`kiro-auth`)
+- Web terminal
+- Node.js 20 LTS, AWS CLI v2, AWS CDK
+- Nirmata CLI (`nctl`)
 
-- Kiro CLI (latest version) - installed to `~/.local/bin`
-- AWS CLI v2 - installed to `~/.local/aws-cli` with binaries in `~/bin`
-- AWS CDK - installed to `~/.npm-global` with binaries in `~/bin`
-- Node.js 20.x LTS (system-wide)
-- npm configured for user-local global packages
+## Runtime & infrastructure
+- **Compute:** AWS Fargate (namespace `coder-ws`), no EC2 worker nodes
+- **Storage:** Amazon EFS access point mounted at `/home/coder` (`ReadWriteMany`, persistent)
+- **Image:** [`images/coder-workspace-kiro-cli/Dockerfile`](../../images/coder-workspace-kiro-cli/Dockerfile)
 
-### Coder Apps
-- **code-server**: Web-based VS Code IDE
-- **Kiro**: Kiro IDE Workspace interface
-- **Kiro CLI**: One-click button to authenticate Kiro CLI
-- **Preview**: Preview web applications running on localhost:3000
+## Parameters
 
-## Getting Started
+| Parameter | Default | Range |
+|-----------|---------|-------|
+| CPU cores | 4 | 2–8 |
+| Memory (GB) | 8 | 4–16 |
 
-1. Create a workspace from this template
-2. Once the workspace starts, click the "Authenticate Kiro" button to log in to Kiro
-3. Open code-server or Kiro to start developing
-4. Use the terminal to run `kiro` commands
+Storage is provisioned automatically via EFS; there is no disk-size parameter.
 
-## Kiro CLI Usage
-
-After authenticating, you can use Kiro from the terminal:
-
-```bash
-# Start a chat session
-kiro-cli chat
-
-# Ask Kiro a question
-kiro-cli ask "How do I deploy to AWS?"
-
-# Get help
-kiro-cli --help
-
-# Check version
-kiro-cli version
-```
-
-## Configuration
-
-### Parameters
-- **CPU cores**: 2-8 cores (default: 4)
-- **Memory**: 4-16 GB (default: 8 GB)
-- **PVC storage size**: 10-50 GB (default: 30 GB)
-
-### Namespace
-The default Kubernetes namespace is `coder`. Update the `namespace` variable if deploying to a different namespace.
-
-## AWS Integration
-
-This template includes AWS CLI and CDK for seamless AWS development. Ensure your workspace has appropriate IAM permissions configured via the Kubernetes service account.
+## Getting started
+1. Create a workspace from this template.
+2. Click the **Kiro CLI** (authenticate) app to log in.
+3. Open code-server or Kiro and use `kiro-cli chat` in the terminal.
 
 ## Notes
-
-- The workspace uses the `codercom/enterprise-base:ubuntu` image
-- All tools are installed during the first workspace startup
-- Subsequent starts will skip installation if tools are already present
-- The home directory (`/home/coder`) persists across workspace restarts
+- Tools installed outside `/home/coder` are part of the container image; rebuild the image to
+  add system packages. Files under `/home/coder` persist across restarts.
+- For Coder Agents, the [`awshp-k8s-challenge-agent`](../awshp-k8s-challenge-agent) template
+  is the environment optimized for agentic use.

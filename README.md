@@ -1,209 +1,190 @@
 # AWS Coder AI-DLC GitOps
 
-Enterprise-grade AI-powered development platform on AWS using Coder, Kubernetes, and integrated AI assistants (Claude Code and Kiro CLI).
+AI-powered development platform on AWS: [Coder](https://coder.com) on Amazon EKS, with
+**serverless Fargate workspaces** and **Coder Agents** backed by Amazon Bedrock.
 
 ![Architecture Diagram](images/AWSCoderSingleRegionv2-0.png)
 
 ## Overview
 
-This repository provides infrastructure-as-code and Coder workspace templates for deploying a complete AI-assisted development environment on AWS. The platform combines Coder's cloud development environments with AI coding assistants, running on Amazon EKS with Aurora PostgreSQL backend.  See [Deployment Instructions](#deployment-instructions) to deploy into your own AWS Account.
+This repository deploys a complete AI-assisted development environment via a single
+CloudFormation stack. Two capabilities are the focus of this platform:
 
-## Architecture
+- **Fargate workspaces** — developer workspaces run on AWS Fargate (serverless pods), with
+  persistent home directories backed by Amazon EFS. No worker nodes to manage or scale for
+  workspace compute.
+- **Coder Agents** — the built-in agentic coding assistant, wired to Amazon Bedrock (native)
+  and Bedrock Mantle (OpenAI-compatible) so agents run entirely on AWS-hosted models.
 
-The deployment creates:
+See [Deployment](#deployment) to run it in your own AWS account.
 
-- **Amazon EKS Cluster** (Auto Mode) with Kubernetes 1.35
-- **Aurora PostgreSQL Serverless v2** for Coder database
-- **CloudFront Distribution** for secure global access
-- **Network Load Balancer** for EKS ingress
-- **VPC with Public/Private Subnets** across 2 availability zones
-- **NAT Gateways** for private subnet internet access
-- **S3 Buckets** for CloudFront and NLB logging
-- **Secrets Manager** for credential storage
-- **IAM Roles** with least-privilege permissions
+## Why this matters: AWS AI-DLC
 
-## Available Workspace Templates
+This platform is purpose-built to operationalize the **AWS AI-Driven Development Life Cycle
+(AI-DLC)** — AWS's methodology for adopting agentic AI across the software lifecycle while
+keeping humans in control. AI-DLC structures work into a **three-phase, human-approved
+workflow** — *Inception* (the what and why), *Construction* (the how), and *Review* (did it
+work) — where AI agents plan, implement, and review, and engineers make the decisions at
+every phase gate. Agents pause and ask when they need clarification, and requirements stay
+traceable down to the code they produce.
 
-### 1. Kubernetes with Kiro CLI (`awshp-k8s-base-kirocli`)
+The hard part of adopting AI-DLC is not the agents — it is giving them a place to *act*
+safely. That is what this repository provides:
 
-AI-powered development workspace with Kiro CLI integration.
+- **A governed execution surface.** Agentic “Construction” means agents run commands,
+  install dependencies, and execute generated code. Doing that on
+  [Firecracker microVM](https://firecracker-microvm.github.io/)-isolated
+  [Fargate workspaces](#fargate-workspaces) confines each agent run to a disposable,
+  single-tenant VM — the blast radius of an autonomous action is one sandbox.
+- **Enterprise guardrails by construction.** Workspaces inherit scoped IAM roles, run inside
+  your VPC, use models served through Amazon Bedrock, and are provisioned from version-
+  controlled, reviewable templates. Access, networking, models, and tooling are all things
+  the enterprise defines — not the agent.
+- **Centralized, auditable AI access.** [Coder Agents](#coder-agents) route through
+  admin-configured Bedrock providers and models, so model choice, usage, and budgets are
+  governed centrally rather than per-developer.
 
-**Features:**
-- Kiro CLI for AI-assisted development
-- Kiro IDE web interface
-- code-server (VS Code in browser)
-- AWS CLI v2 and AWS CDK pre-installed
-- Node.js 20.x LTS
-- Nirmata CLI (nctl)
-- MCP server support (Pulumi, LaunchDarkly, Arize)
-- Persistent home directory storage
+### Fit for highly regulated enterprises — and everyone else
 
-**Default Resources:**
-- CPU: 2 cores (configurable 2-8)
-- Memory: 4 GB (configurable 4-16 GB)
-- Storage: 30 GB (configurable 10-50 GB)
+For **highly regulated industries** (financial services, healthcare, public sector), the
+primary barrier to agentic AI is not capability but **control, isolation, and
+auditability**. Running AI-DLC on this platform addresses those directly: VM-level isolation
+per workspace (Firecracker), no shared kernels, data and inference kept within AWS accounts
+and Regions you control, IAM/VPC boundaries around every agent, and human approval gates
+built into the methodology. AWS's own [Responsible AI
+Policy](https://aws.amazon.com/ai/responsible-ai/policy/) — review agent output and costs —
+maps cleanly onto AI-DLC's human-in-the-loop phase gates.
 
-### 2. Kubernetes with Claude Code (`awshp-k8s-base-claudecode`)
+The same properties let **any size enterprise** scale agentic development effectively:
+start small with disposable sandboxes, keep humans deciding intent and reviewing output, and
+grow agent autonomy as confidence in the guardrails grows — without standing up bespoke
+isolation or governance infrastructure.
 
-Autonomous AI development workspace with Claude Code task automation.
+**Learn more about AI-DLC:**
 
-**Features:**
-- Claude Code AI assistant with task automation
-- AWS Bedrock integration (Claude Opus 4.5)
-- Kiro IDE web interface
-- code-server (VS Code in browser)
-- AWS CLI v2 and AWS CDK pre-installed
-- Node.js 20.x LTS
-- Nirmata CLI (nctl)
-- MCP server support (Pulumi, LaunchDarkly, Arize)
-- Preview server on port 3000
-- Persistent home directory storage
+- AWS DevOps Blog — [AI-Driven Development Life
+  Cycle](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/) (methodology)
+- `awslabs/aidlc-workflows` — [adaptive AI-DLC workflow rules for AI coding
+  agents](https://github.com/awslabs/aidlc-workflows) (Kiro, Amazon Q, Claude Code, Cursor,
+  Copilot, and more)
+- `aws-samples/sample-collaborative-ai-dlc` — [collaborative AI-DLC
+  platform](https://github.com/aws-samples/sample-collaborative-ai-dlc) (reference
+  implementation)
 
-**Default Resources:**
-- CPU: 4 cores (configurable 2-8)
-- Memory: 8 GB (configurable 4-16 GB)
-- Storage: 30 GB (configurable 10-50 GB)
+## Fargate Workspaces
+
+Workspaces are scheduled onto an EKS **Fargate profile** (`coder-workspaces`, selector
+`namespace=coder-ws`) instead of EC2 worker nodes. Because Fargate does not support EBS
+volumes, persistent storage uses **Amazon EFS** mounted `ReadWriteMany`.
+
+### Firecracker microVM isolation — sandboxes for humans *and* agents
+
+AWS Fargate runs every pod inside a dedicated
+[**Firecracker microVM**](https://firecracker-microvm.github.io/). Each workspace therefore
+gets hardware-virtualized, single-tenant isolation — its own kernel and a minimal,
+purpose-built virtualization boundary — rather than sharing a kernel with neighboring
+containers, while still booting in a fraction of a second.
+
+That combination of **strong isolation + fast, ephemeral startup** is exactly what you want
+for **cloud sandboxes used by both human developers and agentic AI**:
+
+- **Blast-radius containment** — an autonomous agent running commands, installing packages,
+  or executing generated code is confined to a single-use microVM, not a shared host.
+- **Clean, reproducible environments** — workspaces are disposable; spin one up per
+  developer, per task, or per agent run and throw it away.
+- **Defense in depth** — VM-level isolation layers on top of Kubernetes namespaces, IAM
+  scoping, and VPC network controls.
+
+This makes the platform a safe execution surface for letting AI agents *build* — not just
+suggest — inside guardrails the enterprise controls.
+
+| Component | Purpose |
+|-----------|---------|
+| EKS Fargate profile `coder-workspaces` | Runs every workspace pod in the `coder-ws` namespace serverlessly |
+| Dedicated Fargate subnets (2 AZs) | Private subnets for Fargate pod ENIs |
+| EFS file system (encrypted, elastic throughput) | Persistent `/home/coder` per workspace, survives restarts |
+| EFS mount targets + NFS security group | Reachable from Fargate pods over port 2049 within the VPC |
+| `efs-static` StorageClass (`efs.csi.aws.com`) | Binds each workspace PVC to its EFS access point |
+| `FargatePodExecutionRole` | Pulls images and runs pods under `AmazonEKSFargatePodExecutionRolePolicy` |
+
+Workspace templates create an EFS access point + PV/PVC per workspace and mount it at
+`/home/coder`. Tools installed outside the home directory live in the container image.
+
+## Coder Agents
+
+Coder Agents are configured during deployment through the Coder API (no console clicks
+required). Two AI providers are provisioned:
+
+| Provider | Type | Endpoint | Models |
+|----------|------|----------|--------|
+| `aws-bedrock-partner` | Bedrock (native, SigV4) | `bedrock-runtime.us-east-1` | Claude Opus 4.8 (default), Claude Haiku 4.5 (small/fast) |
+| `openai-compat` | OpenAI-compatible (Bedrock Mantle) | `bedrock-mantle.us-east-1` | Mistral Large 3, Devstral 2 |
+
+Notes:
+- Anthropic models use global cross-region inference profile IDs and are served from
+  **us-east-1**, independent of the stack's deployment region.
+- The Bedrock Mantle (OpenAI-compatible) API key is generated automatically from an IAM
+  service-specific credential and stored in Secrets Manager.
+- Provider and model configuration is applied idempotently by the CodeBuild deployment
+  script via `/api/v2/ai/providers` and `/api/experimental/chats/model-configs`.
+
+## Workspace Templates
+
+Templates live in [`templates/`](./templates) and are deployed via Terraform + the Coder
+provider (see [GitOps Workflow](#gitops-workflow)). Each template's `description` and
+`README.md` describe its capabilities so Coder Agents can pick the right environment.
+
+| Template | Display Name | Best for |
+|----------|--------------|----------|
+| `awshp-k8s-challenge-agent` | Clash of Agents — Challenge Workspace | **Optimized for Coder Agents.** Pre-loaded Python agent frameworks (Strands, LangGraph, LangChain, LlamaIndex, Lyzr) + Bedrock. |
+| `awshp-k8s-base-claudecode` | AWS Workshop — Kubernetes with Claude Code | Claude Code AI assistant with task automation. |
+| `awshp-k8s-base-kirocli` | AWS Workshop — Kubernetes with Kiro CLI | Kiro CLI AI assistant for interactive development. |
+
+All templates run on Fargate with EFS-backed persistent home directories.
 
 ## Prerequisites
 
-- AWS Account with appropriate permissions
+- AWS account with permissions to create EKS, VPC, Aurora, CloudFront, EFS, IAM, and Secrets Manager resources
 - AWS CLI configured
-- CloudFormation access
-- Sufficient service quotas for:
-  - EKS clusters
-  - Aurora PostgreSQL
-  - CloudFront distributions
-  - VPC resources (NAT Gateways, Elastic IPs)
+- Sufficient quotas for EKS, Aurora PostgreSQL, CloudFront, and VPC resources (NAT Gateways, EIPs)
+- Amazon Bedrock model access enabled in **us-east-1** for the configured Claude and Mistral models
 
-## Deployment Instructions
+## Deployment
 
-### Step 1: Deploy CloudFormation Stack
+1. Open the AWS CloudFormation console and create a stack from
+   [`infrastructure/coder_deployment.yaml`](./infrastructure/coder_deployment.yaml).
+2. Set the required parameters:
+   - `CoderAdminEmail`, `CoderAdminUser`, `CoderAdminPassword`, `CoderAdminName`
+3. Optional parameters (defaults shown):
+   - `EKSClusterName` (`coder-aws-cluster`), `KubernetesVersion` (`1.35`),
+     `CoderVersion` (`2.34.4`), `CoderPremiumTrial` (`false`),
+     `CoderGitOpsTemplateRepoURL`, `RetryFlag` (`False`)
+4. Acknowledge IAM resource creation and create the stack (~30–45 minutes).
 
-1. Navigate to AWS CloudFormation console in your desired region
-2. Create a new stack using [`infrastructure/coder_deployment.yaml`](./infrastructure/coder_deployment.yaml)
-3. Configure the following parameters:
+The stack provisions networking, Aurora PostgreSQL, the EKS cluster (Auto Mode + Fargate
+profile), EFS storage, installs Coder via Helm, configures CloudFront, deploys templates,
+and configures Coder Agents providers/models.
 
-**Required Parameters:**
-- `CoderAdminEmail`: Administrator email address
-- `CoderAdminUser`: Administrator username (default: `admin`)
-- `CoderAdminPassword`: Administrator password (min 8 characters)
-- `CoderAdminName`: Administrator full name
+Monitor progress in the CloudFormation **Events** tab and the CodeBuild logs
+(`/aws/codebuild/CodeBuild-<StackName>`).
 
-**Optional Parameters:**
-- `EKSClusterName`: Name for EKS cluster (default: `coder-aws-cluster`)
-- `KubernetesVersion`: Kubernetes version (default: `1.35`)
-- `CoderVersion`: Coder version (default: `2.29.1`)
-- `WorkerNodeInstanceType`: EC2 instance type (default: `t3.large`)
-- `CoderPremiumTrial`: Start 30-day trial (default: `false`)
-- `CoderGitOpsTemplateRepoURL`: Template repository URL
-- `RetryFlag`: Rerun with existing EKS (default: `False`)
+### Access
 
-4. Acknowledge IAM resource creation
-5. Create the stack
+When the stack completes, use these CloudFormation **Outputs**:
 
-**Deployment Time:** Approximately 30-45 minutes
+- `CoderURL` — CloudFront URL for the Coder dashboard
+- `CoderAdminEmail` / `CoderAdminPassword` (also in Secrets Manager via
+  `CoderAdminPasswordSecretArn`)
+- `CoderSessionTokenSecretArn` — API token secret
 
-### Step 2: Monitor Deployment
-
-The CloudFormation stack orchestrates:
-1. VPC and networking setup
-2. Aurora PostgreSQL cluster creation
-3. EKS cluster provisioning (Auto Mode)
-4. Coder installation via Helm
-5. CloudFront distribution setup
-6. GitOps template deployment
-
-Monitor progress in:
-- CloudFormation Events tab
-- CodeBuild logs: `/aws/codebuild/CodeBuild-<StackName>`
-- EKS cluster creation in EKS console
-
-### Step 3: Retrieve Access Information
-
-Once deployment completes, find these outputs in CloudFormation Outputs tab:
-
-**Critical Outputs:**
-- `CoderURL`: CloudFront URL for accessing Coder (e.g., `https://d1234567890.cloudfront.net`)
-- `CoderAdminEmail`: Administrator email
-- `CoderAdminPassword`: Administrator password
-- `CoderAdminPasswordSecretArn`: Secrets Manager ARN for password
-- `CoderSessionTokenSecretArn`: Secrets Manager ARN for API token
-- `PostgreSQLConnectionURLWithoutPassword`: Database connection string
-- `CloudFormationStack`: Stack name for reference
-
-### Step 4: Access Coder
-
-1. Open the `CoderURL` from CloudFormation outputs
-2. Log in with:
-   - Email: Value from `CoderAdminEmail` output
-   - Password: Value from `CoderAdminPassword` output (or retrieve from Secrets Manager)
-
-3. Create your first workspace:
-   - Click "Create Workspace"
-   - Select one of the available templates
-   - Configure resources (CPU, memory, storage)
-   - For Claude Code templates, provide an AI task prompt
-   - Click "Create Workspace"
-
-### Step 5: Configure MCP Servers (Optional)
-
-For templates with MCP (Model Context Protocol) server support:
-
-1. **Pulumi MCP Server:**
-   - Obtain bearer token from [Pulumi](https://www.pulumi.com/)
-   - Update template variable `mcp_bearer_token_pulumi`
-
-2. **LaunchDarkly MCP Server:**
-   - Obtain API key from [LaunchDarkly](https://launchdarkly.com/)
-   - Update template variable `mcp_bearer_token_launchdarkly`
-
-3. **Arize Tracing Assistant:**
-   - Pre-configured via uvx, no additional setup required
-
-## Infrastructure Components
-
-### Networking
-- **VPC CIDR:** 192.168.0.0/16
-- **Public Subnets:** 192.168.0.0/19, 192.168.32.0/19
-- **Private Subnets:** 192.168.96.0/19, 192.168.128.0/19
-- **NAT Gateways:** 2 (one per AZ for high availability)
-- **Internet Gateway:** Single IGW for public subnet access
-
-### Security
-- **Encryption at Rest:** KMS encryption for EKS secrets and Aurora
-- **Encryption in Transit:** TLS via CloudFront and NLB
-- **IAM Roles:** Least-privilege access for workspaces
-- **Security Groups:** Restrictive rules for Aurora (port 5432 from VPC only)
-- **Secrets Management:** AWS Secrets Manager for credentials
-
-### Database
-- **Engine:** Aurora PostgreSQL 16.6
-- **Mode:** Serverless v2
-- **Scaling:** 0.5 - 128 ACUs
-- **Backup:** 3-day retention
-- **Encryption:** Enabled with KMS
-
-### Kubernetes
-- **Mode:** EKS Auto Mode (managed node scaling)
-- **Version:** 1.35
-- **Add-ons:** aws-ebs-csi-driver for persistent volumes
-- **Logging:** CloudWatch Logs for all log types
-- **OIDC:** Enabled for IAM roles for service accounts
-- **Storage Class:** gp3 EBS volumes for workspace persistence
-
-### Observability
-- **CloudWatch Logs:** EKS control plane and CodeBuild logs
-- **S3 Logging:** CloudFront and NLB access logs
-- **Log Retention:** 90 days
+Log in at `CoderURL`, then create a workspace from one of the templates.
 
 ## GitOps Workflow
 
-Templates are deployed using Terraform with the Coder provider:
-
-1. **Template Source:** `templates/` directory
-2. **Version Control:** Git SHA used for template versioning
-3. **Deployment:** Automated via `templates_gitops.sh` during stack creation
-4. **Updates:** Re-run script with new Git SHA to update templates
+Templates are versioned by Git SHA and applied with the Coder Terraform provider. The stack
+runs [`templates/templates_gitops.sh`](./templates/templates_gitops.sh) automatically;
+template metadata (name, display name, description, icon, image, EFS id) is defined in
+[`templates/template_versions.tf`](./templates/template_versions.tf).
 
 ```bash
 # Manual template update
@@ -214,112 +195,46 @@ export TF_VAR_coder_gitsha="$(git log -1 --format=%H)"
 terraform apply -auto-approve
 ```
 
-## Workspace Permissions
+## Architecture Summary
 
-Workspaces run with the `coder-and-aws-workshop-user` IAM role, providing access to:
-
-- **Amazon Bedrock:** Full access for AI model inference
-- **AWS Secrets Manager:** Create and manage secrets
-- **AWS Lambda:** Create and manage functions
-- **Amazon S3:** Full access for storage
-- **AWS IAM:** Limited role and policy management
-- **Amazon EKS:** Cluster operations
-- **Amazon CloudFront:** Distribution management
-- **Amazon EC2:** Instance and VPC operations
-- **Amazon OpenSearch:** Serverless collections
-- **Amazon DynamoDB:** Table operations
-- **Amazon RDS:** Database operations
-- **Amazon SageMaker:** Notebook and endpoint management
-- **AWS CloudFormation:** Stack operations
-- **Amazon CloudWatch Logs:** Log management
-- **AWS KMS:** Key operations
-
-**Restrictions:**
-- Cannot modify AWS-managed or workshop-created roles
-- Cannot delete OpenID Connect providers
+- **EKS** — Auto Mode (control plane + system workloads) with a dedicated **Fargate profile** for workspaces
+- **Aurora PostgreSQL Serverless v2** — Coder database (encrypted, KMS)
+- **CloudFront + Network Load Balancer** — secure global access to Coder
+- **VPC** — public/private/Fargate subnets across 2 AZs, NAT gateways for egress
+- **EFS** — persistent workspace home directories (Fargate-compatible)
+- **Secrets Manager** — admin password, session token, Bedrock Mantle API key
+- **IAM** — `coder-and-aws-workshop-user` workspace role (Bedrock, Bedrock Mantle, S3, Secrets Manager, EKS, EFS, etc.)
 
 ## Troubleshooting
 
-### Stack Creation Fails
-
-1. Check CodeBuild logs: `/aws/codebuild/CodeBuild-<StackName>`
-2. Verify service quotas for EKS, Aurora, CloudFront
-3. Ensure IAM permissions are sufficient
-4. Check for resource naming conflicts
-
-### Cannot Access Coder URL
-
-1. Verify CloudFront distribution status (must be "Deployed")
-2. Check NLB target health in EC2 console
-3. Verify Coder pod is running: `kubectl get pods -n coder`
-4. Check security group rules allow traffic
-
-### Workspace Creation Fails
-
-1. Check EKS node capacity
-2. Verify storage class exists: `kubectl get sc`
-3. Check PVC creation: `kubectl get pvc -n coder`
-4. Review workspace logs in Coder UI
-
-### MCP Servers Not Working
-
-1. Verify bearer tokens are correctly configured
-2. Check workspace startup logs for MCP initialization
-3. Ensure Node.js and npm are installed
-4. For uvx-based servers, verify uv installation
+| Symptom | Checks |
+|---------|--------|
+| Stack creation fails | CodeBuild logs `/aws/codebuild/CodeBuild-<StackName>`; service quotas; IAM permissions |
+| Cannot reach `CoderURL` | CloudFront status is `Deployed`; NLB target health; `kubectl get pods -n coder` |
+| Workspace won't start | Fargate profile is `ACTIVE`; `kubectl get sc` shows `efs-static`; EFS mount targets healthy; `kubectl get pvc -n coder-ws` |
+| Coder Agent model errors | Bedrock model access in us-east-1; provider config via `/api/v2/ai/providers`; Bedrock Mantle secret populated |
 
 ## Cleanup
 
-To delete all resources:
+1. Delete all Coder workspaces from the UI.
+2. Delete the CloudFormation stack.
+3. Manually remove any retained resources (CloudFront distribution, logging S3 buckets, EKS
+   cluster, Aurora cluster, EFS file system) if they were not auto-deleted.
 
-1. Delete all Coder workspaces from the UI
-2. Delete the CloudFormation stack
-3. Manually delete:
-   - CloudFront distribution (if not auto-deleted)
-   - S3 buckets (logging buckets)
-   - EKS cluster (if not auto-deleted)
-   - Aurora cluster (if not auto-deleted)
+## Resources
 
-**Note:** Some resources may require manual deletion due to CloudFormation protection or dependencies.
-
-## Cost Considerations
-
-Estimated monthly costs (us-west-2, on-demand pricing):
-
-- **EKS Cluster:** ~$73/month (control plane)
-- **EC2 Instances:** Variable based on Auto Mode scaling
-- **Aurora Serverless v2:** ~$43/month minimum (0.5 ACU)
-- **NAT Gateways:** ~$65/month (2 gateways)
-- **CloudFront:** Variable based on traffic
-- **Data Transfer:** Variable based on usage
-
-**Cost Optimization:**
-- Use workspace auto-stop policies
-- Scale down Aurora during off-hours
-- Monitor and adjust EKS Auto Mode settings
-- Review CloudWatch Logs retention
-
-## Security Best Practices
-
-1. **Rotate Credentials:** Regularly rotate Coder admin password and session tokens
-2. **Enable MFA:** Configure MFA for AWS account and Coder users
-3. **Review IAM Policies:** Audit workspace IAM role permissions
-4. **Monitor Access:** Enable CloudTrail and review access logs
-5. **Update Regularly:** Keep Coder, Kubernetes, and dependencies updated
-6. **Network Segmentation:** Use security groups and NACLs appropriately
-7. **Secrets Management:** Never commit secrets to Git; use Secrets Manager
-
-## Support and Resources
-
-- **Coder Documentation:** [https://coder.com/docs](https://coder.com/docs)
-- **AWS EKS Documentation:** [https://docs.aws.amazon.com/eks/](https://docs.aws.amazon.com/eks/)
-- **Kiro CLI Documentation:** [https://kiro.dev/docs](https://kiro.dev/docs)
-- **Claude Code Documentation:** [https://coder.com/docs/claude-code](https://coder.com/docs/claude-code)
+- [AWS AI-DLC (AI-Driven Development Life Cycle)](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/) and [awslabs/aidlc-workflows](https://github.com/awslabs/aidlc-workflows)
+- [Firecracker microVM](https://firecracker-microvm.github.io/) (powers AWS Fargate isolation)
+- [Coder Documentation](https://coder.com/docs)
+- [Amazon EKS Fargate](https://docs.aws.amazon.com/eks/latest/userguide/fargate.html)
+- [Amazon EFS CSI Driver](https://docs.aws.amazon.com/eks/latest/userguide/efs-csi.html)
+- [AWS Responsible AI Policy](https://aws.amazon.com/ai/responsible-ai/policy/)
 
 ## License
 
-See [LICENSE](LICENSE) file for details.
+See [LICENSE](LICENSE).
 
 ## Contributing
 
-This repository is designed for AWS AI Builder Lab Events. For modifications or contributions, please follow standard GitOps practices and test changes in a non-production environment first.
+Designed for AWS AI Builder Lab events. Follow standard GitOps practices and test changes in
+a non-production environment first.
