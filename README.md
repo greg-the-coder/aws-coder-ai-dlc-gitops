@@ -144,26 +144,71 @@ All templates run on Fargate with EFS-backed persistent home directories.
 
 ## Prerequisites
 
-- AWS account with permissions to create EKS, VPC, Aurora, CloudFront, EFS, IAM, and Secrets Manager resources
+- AWS account with permissions to create EKS, VPC, Aurora, CloudFront, EFS, ECR, CodeBuild, IAM, Lambda, and Secrets Manager resources
 - AWS CLI configured
 - Sufficient quotas for EKS, Aurora PostgreSQL, CloudFront, and VPC resources (NAT Gateways, EIPs)
 - Amazon Bedrock model access enabled in **us-east-1** for the configured Claude and Mistral models
+- Deploy the [image pipeline stack](#step-1-build-workspace-images-codebuild_image_pipelineyaml) **before** the core stack (see [Deployment](#deployment))
 
 ## Deployment
+
+Deployment is a **two-stack** process. The image pipeline stack must be deployed **first** —
+it builds the container images the Fargate workspaces run on and publishes them to ECR. The
+core Coder stack then references those images by URI, so it depends on the pipeline having
+run successfully.
+
+```
+codebuild_image_pipeline.yaml   ->   builds & pushes ECR images   ->   coder_deployment.yaml
+     (Step 1, run first)               (coder-workspace-*:latest)          (Step 2)
+```
+
+### Step 1: Build workspace images (`codebuild_image_pipeline.yaml`)
+
+This stack creates three ECR repositories, a CodeBuild project, and a Lambda-backed custom
+resource that runs the build automatically on stack create. It builds and pushes the images
+used by the Fargate templates:
+
+| ECR repository | Built from | Used by template |
+|----------------|------------|------------------|
+| `<EKSClusterName>/coder-workspace-claude-code` | [`images/coder-workspace-claude-code/`](./images/coder-workspace-claude-code) | `awshp-k8s-base-claudecode` |
+| `<EKSClusterName>/coder-workspace-kiro-cli` | [`images/coder-workspace-kiro-cli/`](./images/coder-workspace-kiro-cli) | `awshp-k8s-base-kirocli` |
+| `<EKSClusterName>/coder-workspace-challenge` | [`images/coder-workspace-challenge/`](./images/coder-workspace-challenge) | `awshp-k8s-challenge-agent` |
+
+1. Create a stack from
+   [`infrastructure/codebuild_image_pipeline.yaml`](./infrastructure/codebuild_image_pipeline.yaml).
+2. Set parameters:
+   - `EKSClusterName` — **must match** the value you will use for the core stack (default
+     `coder-aws-cluster`); the ECR repository names are derived from it.
+   - `GitRepoURL` — repository containing the `images/` Dockerfiles (default is this repo).
+   - `GitBranch` — branch to build from (default `main`).
+3. Acknowledge IAM resource creation and create the stack.
+4. The custom resource starts the CodeBuild job automatically and waits for it to finish.
+   Confirm success in the **CodeBuild** console (project `<EKSClusterName>-workspace-image-build`)
+   and verify each ECR repository has a `latest` image before continuing.
+
+> **Important:** Deploy this stack in the **same AWS account and Region** as the core stack,
+> and use the **same `EKSClusterName`**. The core stack builds the image URIs by convention
+> (`<account>.dkr.ecr.<region>.amazonaws.com/<EKSClusterName>/coder-workspace-*:latest`); if
+> the repositories are missing or empty, workspaces will fail to start with image-pull errors.
+>
+> To rebuild images later (e.g., after changing a Dockerfile), start the
+> `<EKSClusterName>-workspace-image-build` CodeBuild project again — no stack update needed.
+
+### Step 2: Deploy Coder (`coder_deployment.yaml`)
 
 1. Open the AWS CloudFormation console and create a stack from
    [`infrastructure/coder_deployment.yaml`](./infrastructure/coder_deployment.yaml).
 2. Set the required parameters:
    - `CoderAdminEmail`, `CoderAdminUser`, `CoderAdminPassword`, `CoderAdminName`
 3. Optional parameters (defaults shown):
-   - `EKSClusterName` (`coder-aws-cluster`), `KubernetesVersion` (`1.35`),
-     `CoderVersion` (`2.34.4`), `CoderPremiumTrial` (`false`),
+   - `EKSClusterName` (`coder-aws-cluster`) — **use the same value as Step 1**,
+     `KubernetesVersion` (`1.35`), `CoderVersion` (`2.34.4`), `CoderPremiumTrial` (`false`),
      `CoderGitOpsTemplateRepoURL`, `RetryFlag` (`False`)
 4. Acknowledge IAM resource creation and create the stack (~30–45 minutes).
 
 The stack provisions networking, Aurora PostgreSQL, the EKS cluster (Auto Mode + Fargate
-profile), EFS storage, installs Coder via Helm, configures CloudFront, deploys templates,
-and configures Coder Agents providers/models.
+profile), EFS storage, installs Coder via Helm, configures CloudFront, deploys templates
+(pointing at the ECR images from Step 1), and configures Coder Agents providers/models.
 
 Monitor progress in the CloudFormation **Events** tab and the CodeBuild logs
 (`/aws/codebuild/CodeBuild-<StackName>`).
@@ -202,6 +247,7 @@ terraform apply -auto-approve
 - **CloudFront + Network Load Balancer** — secure global access to Coder
 - **VPC** — public/private/Fargate subnets across 2 AZs, NAT gateways for egress
 - **EFS** — persistent workspace home directories (Fargate-compatible)
+- **ECR** — three `coder-workspace-*` repositories holding the Fargate workspace images built by the [image pipeline stack](#step-1-build-workspace-images-codebuild_image_pipelineyaml)
 - **Secrets Manager** — admin password, session token, Bedrock Mantle API key
 - **IAM** — `coder-and-aws-workshop-user` workspace role (Bedrock, Bedrock Mantle, S3, Secrets Manager, EKS, EFS, etc.)
 
@@ -212,6 +258,7 @@ terraform apply -auto-approve
 | Stack creation fails | CodeBuild logs `/aws/codebuild/CodeBuild-<StackName>`; service quotas; IAM permissions |
 | Cannot reach `CoderURL` | CloudFront status is `Deployed`; NLB target health; `kubectl get pods -n coder` |
 | Workspace won't start | Fargate profile is `ACTIVE`; `kubectl get sc` shows `efs-static`; EFS mount targets healthy; `kubectl get pvc -n coder-ws` |
+| Workspace image pull error / `ImagePullBackOff` | Step 1 image pipeline ran successfully; each `<EKSClusterName>/coder-workspace-*` ECR repo has a `latest` image; `EKSClusterName` and Region match between both stacks |
 | Coder Agent model errors | Bedrock model access in us-east-1; provider config via `/api/v2/ai/providers`; Bedrock Mantle secret populated |
 
 ## Cleanup
