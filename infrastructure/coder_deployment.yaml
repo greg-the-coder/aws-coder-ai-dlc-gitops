@@ -68,7 +68,7 @@ Parameters:
   CoderGitOpsTemplateRepoURL:
     Type: String
     Description: Coder GitOps Template Repository URL
-    Default: "https://github.com/coder/aws-coder-ai-dlc-gitops.git"
+    Default: "https://github.com/greg-the-coder/aws-coder-ai-dlc-gitops.git"
     
   RetryFlag:
     Type: String
