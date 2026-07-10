@@ -222,11 +222,11 @@ module "coder-login" {
     agent_id = coder_agent.dev.id
 }
 
-# Provision a persistent Python 3.12 virtual environment + Jupyter kernel for
-# the workshop agent notebooks (LangGraph/LangChain, LlamaIndex, Strands,
-# Bedrock AgentCore). The venv and kernelspec live on the EFS-persistent home,
-# so this runs once and is reused across restarts. Selectable from Jupyter
-# (code-server / Kiro) and by notebook-aware agents as "Python (Agents)".
+# Python 3.12 venv + Jupyter kernel for the workshop agent notebooks
+# (LangGraph/LangChain, LlamaIndex, Strands, Bedrock AgentCore). The workshop
+# images pre-bake this at /opt/venvs/agents with a system-wide "Python (Agents)"
+# kernel, so this script is a fast no-op there. On a non pre-baked base image it
+# falls back to provisioning into the EFS-persistent home (one-time).
 resource "coder_script" "agent_python_kernel" {
     agent_id           = coder_agent.dev.id
     display_name       = "Python/Jupyter agent kernel"
@@ -236,22 +236,26 @@ resource "coder_script" "agent_python_kernel" {
     script             = <<-EOT
     #!/bin/sh
     set -eu
+
+    # Fast path: pre-baked in the workshop image (outside the EFS-mounted home).
+    if [ -x /opt/venvs/agents/bin/python ]; then
+      echo "Agent Python kernel pre-installed in image (/opt/venvs/agents)."
+      exit 0
+    fi
+
+    # Fallback for non pre-baked base images: provision into the persistent home.
     VENV="$HOME/.venvs/agents"
     SENTINEL="$VENV/.provisioned"
-
     if [ -f "$SENTINEL" ]; then
       echo "Agent Python kernel already provisioned at $VENV"
       exit 0
     fi
+    command -v uv >/dev/null 2>&1 || { echo "uv unavailable; skipping kernel setup."; exit 0; }
 
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
-    export UV_LINK_MODE=copy   # EFS-mounted home: avoid hardlink fallback warnings
+    export UV_LINK_MODE=copy
     mkdir -p "$HOME/.venvs"
-
-    # uv (preinstalled) creates the venv without python3-venv and fetches a
-    # managed CPython 3.12 to match the notebooks' kernel.
     uv venv --python 3.12 --seed "$VENV"
-
     uv pip install --python "$VENV/bin/python" \
       ipykernel \
       "boto3>=1.39.0" "botocore>=1.39.0" "pydantic>=2.0.0" \
@@ -261,11 +265,8 @@ resource "coder_script" "agent_python_kernel" {
       llama-index-llms-bedrock-converse llama-index-embeddings-bedrock \
       llama-index-readers-file llama-cloud \
       strands-agents strands-agents-tools
-
-    # Register the kernel so Jupyter and notebook-aware agents can select it.
     "$VENV/bin/python" -m ipykernel install --user \
       --name agents --display-name "Python (Agents)"
-
     touch "$SENTINEL"
     echo "Provisioned Jupyter kernel 'Python (Agents)' -> $VENV"
     EOT

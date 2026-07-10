@@ -45,6 +45,26 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN pip3 install playwright \
     && playwright install chromium --with-deps
 
+# --- Pre-baked Python 3.12 virtualenv + Jupyter kernel for agent notebooks ---
+# Baked at build time OUTSIDE /home/coder (which is overlaid by the EFS
+# persistent volume at runtime) so workspaces start fast. Registers a
+# system-wide Jupyter kernel "Python (Agents)" discoverable by code-server/Kiro.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
+RUN uv venv --python 3.12 --seed /opt/venvs/agents \
+    && UV_LINK_MODE=copy uv pip install --python /opt/venvs/agents/bin/python \
+        ipykernel \
+        "boto3>=1.39.0" "botocore>=1.39.0" "pydantic>=2.0.0" \
+        bedrock-agentcore bedrock-agentcore-starter-toolkit \
+        langchain langchain-core langchain-aws langchain-anthropic langchain-community langgraph \
+        "llama-index>=0.12.0" llama-index-core llama-index-llms-bedrock \
+        llama-index-llms-bedrock-converse llama-index-embeddings-bedrock \
+        llama-index-readers-file llama-cloud \
+        strands-agents strands-agents-tools \
+    && /opt/venvs/agents/bin/python -m ipykernel install --prefix=/usr/local \
+        --name agents --display-name "Python (Agents)" \
+    && chown -R coder:coder /opt/venvs /opt/uv \
+    && chmod -R a+rX /opt/venvs /opt/uv
+
 # Ensure coder user owns their home directory
 RUN chown -R coder:coder /home/coder
 
