@@ -203,6 +203,7 @@ module "code-server" {
     folder         = local.home_folder
     subdomain = false
     order = 0
+    extensions = ["ms-toolsai.jupyter"]
 }
 
 module "kiro" {
@@ -210,6 +211,55 @@ module "kiro" {
     version  = "1.1.0"
     agent_id = coder_agent.dev.id
     order = 1
+}
+
+# Auto-install the Jupyter extension for the Kiro IDE.
+# Kiro connects as a desktop client and downloads its remote server on first
+# connect, so we install into the (EFS-persistent) Kiro server extensions dir:
+# immediately if the server is already present, otherwise via a one-time
+# background poller. Dependencies resolve automatically from Open VSX.
+resource "coder_script" "kiro_jupyter_extension" {
+    agent_id           = coder_agent.dev.id
+    display_name       = "Kiro: install Jupyter extension"
+    icon               = "/icon/kiro.svg"
+    run_on_start       = true
+    start_blocks_login = false
+    script             = <<-EOT
+    #!/bin/sh
+    set -eu
+    EXT_ID="ms-toolsai.jupyter"
+    KIRO_BIN="$HOME/.kiro-server/bin"
+    SENTINEL="$HOME/.kiro-server/.jupyter-ext-installed"
+
+    if [ -f "$SENTINEL" ]; then
+      echo "Kiro: $EXT_ID already provisioned."
+      exit 0
+    fi
+
+    install_ext() {
+      SRV=$(find "$KIRO_BIN" -maxdepth 3 -type f -name kiro-server 2>/dev/null | head -1)
+      [ -n "$SRV" ] || return 1
+      "$SRV" --install-extension "$EXT_ID" && touch "$SENTINEL"
+    }
+
+    if install_ext; then
+      echo "Kiro: installed $EXT_ID."
+    else
+      # Server not downloaded yet (first connect pending) - poll in background.
+      (
+        i=0
+        while [ "$i" -lt 120 ]; do
+          sleep 30
+          if install_ext; then
+            echo "Kiro: installed $EXT_ID after connect."
+            break
+          fi
+          i=$((i + 1))
+        done
+      ) >/tmp/kiro-jupyter-install.log 2>&1 &
+      echo "Kiro: will install $EXT_ID on first connect (background)."
+    fi
+    EOT
 }
 
 resource "coder_app" "kiro_cli" {
