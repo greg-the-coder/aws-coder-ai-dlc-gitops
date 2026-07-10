@@ -40,7 +40,7 @@ variable "efs_file_system_id" {
 variable "anthropic_model" {
   type        = string
   description = "The AWS Inference profile ID of the base Anthropic model to use with Claude Code"
-  default     = "global.anthropic.claude-opus-4-8"
+  default     = "global.anthropic.claude-opus-4-6-v1"
 }
 
 locals {
