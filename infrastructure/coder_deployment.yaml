@@ -1188,12 +1188,12 @@ Resources:
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
                           -H "Content-Type: application/json" \
                           "${CODER_URL}/api/v2/ai/providers" \
-                          -d "{\"type\":\"bedrock\",\"name\":\"bedrock\",\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-8\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}" \
+                          -d "{\"type\":\"bedrock\",\"name\":\"bedrock\",\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-6-v1\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}" \
                           || curl -sf -X PATCH \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
                           -H "Content-Type: application/json" \
                           "${CODER_URL}/api/v2/ai/providers/bedrock" \
-                          -d "{\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-8\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}"
+                          -d "{\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-6-v1\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}"
                         echo "Bedrock (native) provider configured."
 
                         echo "Configuring OpenAI-compat Bedrock Mantle provider..."
@@ -1224,15 +1224,15 @@ Resources:
                         echo "OpenAI-compat provider ID: ${OPENAI_PROVIDER_ID}"
 
 
-                        echo "Adding model: Claude Opus 4.8 (Bedrock)..."
+                        echo "Adding model: Claude Opus 4.6 (Bedrock)..."
                         curl -sf -X POST \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
                           -H "Content-Type: application/json" \
                           "${CODER_URL}/api/experimental/chats/model-configs" \
                           -d "{
                             \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
-                            \"model\": \"global.anthropic.claude-opus-4-8\",
-                            \"display_name\": \"Claude Opus 4.8\",
+                            \"model\": \"global.anthropic.claude-opus-4-6-v1\",
+                            \"display_name\": \"Claude Opus 4.6\",
                             \"enabled\": true,
                             \"is_default\": true,
                             \"context_limit\": 1000000,
@@ -1273,15 +1273,15 @@ Resources:
                           }" || echo "  (may already exist)"
 
 
-                        echo "Adding model: Mistral Large 3 (OpenAI-compat)..."
+                        echo "Adding model: OpenAI gpt-oss-120b (OpenAI-compat)..."
                         curl -sf -X POST \
                           -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
                           -H "Content-Type: application/json" \
                           "${CODER_URL}/api/experimental/chats/model-configs" \
                           -d "{
                             \"ai_provider_id\": \"${OPENAI_PROVIDER_ID}\",
-                            \"model\": \"mistral.mistral-large-3-675b-instruct\",
-                            \"display_name\": \"Mistral Large 3\",
+                            \"model\": \"openai.gpt-oss-120b\",
+                            \"display_name\": \"OpenAI gpt-oss-120b\",
                             \"enabled\": true,
                             \"is_default\": false,
                             \"context_limit\": 128000,

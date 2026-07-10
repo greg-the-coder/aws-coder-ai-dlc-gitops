@@ -109,6 +109,32 @@ resource "coder_agent" "dev" {
         web_terminal    = true
         ssh_helper      = false
     }
+
+    # Live workspace resource utilization shown in the Coder dashboard,
+    # using the agent's built-in `coder stat` command (pod/container-scoped).
+    metadata {
+        display_name = "CPU Usage"
+        key          = "0_cpu_usage"
+        script       = "coder stat cpu"
+        interval     = 10
+        timeout      = 1
+    }
+
+    metadata {
+        display_name = "RAM Usage"
+        key          = "1_ram_usage"
+        script       = "coder stat mem"
+        interval     = 10
+        timeout      = 1
+    }
+
+    metadata {
+        display_name = "Home Disk"
+        key          = "2_home_disk"
+        script       = "coder stat disk --path $HOME"
+        interval     = 60
+        timeout      = 1
+    }
     startup_script = <<-EOT
     set -e
 
@@ -196,6 +222,56 @@ module "coder-login" {
     agent_id = coder_agent.dev.id
 }
 
+# Python 3.12 venv + Jupyter kernel for the workshop agent notebooks
+# (LangGraph/LangChain, LlamaIndex, Strands, Bedrock AgentCore). The workshop
+# images pre-bake this at /opt/venvs/agents with a system-wide "Python (Agents)"
+# kernel, so this script is a fast no-op there. On a non pre-baked base image it
+# falls back to provisioning into the EFS-persistent home (one-time).
+resource "coder_script" "agent_python_kernel" {
+    agent_id           = coder_agent.dev.id
+    display_name       = "Python/Jupyter agent kernel"
+    icon               = "/icon/python.svg"
+    run_on_start       = true
+    start_blocks_login = false
+    script             = <<-EOT
+    #!/bin/sh
+    set -eu
+
+    # Fast path: pre-baked in the workshop image (outside the EFS-mounted home).
+    if [ -x /opt/venvs/agents/bin/python ]; then
+      echo "Agent Python kernel pre-installed in image (/opt/venvs/agents)."
+      exit 0
+    fi
+
+    # Fallback for non pre-baked base images: provision into the persistent home.
+    VENV="$HOME/.venvs/agents"
+    SENTINEL="$VENV/.provisioned"
+    if [ -f "$SENTINEL" ]; then
+      echo "Agent Python kernel already provisioned at $VENV"
+      exit 0
+    fi
+    command -v uv >/dev/null 2>&1 || { echo "uv unavailable; skipping kernel setup."; exit 0; }
+
+    export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
+    export UV_LINK_MODE=copy
+    mkdir -p "$HOME/.venvs"
+    uv venv --python 3.12 --seed "$VENV"
+    uv pip install --python "$VENV/bin/python" \
+      ipykernel \
+      "boto3>=1.39.0" "botocore>=1.39.0" "pydantic>=2.0.0" \
+      bedrock-agentcore bedrock-agentcore-starter-toolkit \
+      langchain langchain-core langchain-aws langchain-anthropic langchain-community langgraph \
+      "llama-index>=0.12.0" llama-index-core llama-index-llms-bedrock \
+      llama-index-llms-bedrock-converse llama-index-embeddings-bedrock \
+      llama-index-readers-file llama-cloud \
+      strands-agents strands-agents-tools
+    "$VENV/bin/python" -m ipykernel install --user \
+      --name agents --display-name "Python (Agents)"
+    touch "$SENTINEL"
+    echo "Provisioned Jupyter kernel 'Python (Agents)' -> $VENV"
+    EOT
+}
+
 module "code-server" {
     source   = "registry.coder.com/coder/code-server/coder"
     version  = "1.3.1"
@@ -203,6 +279,7 @@ module "code-server" {
     folder         = local.home_folder
     subdomain = false
     order = 0
+    extensions = ["ms-toolsai.jupyter"]
 }
 
 module "kiro" {
@@ -210,6 +287,55 @@ module "kiro" {
     version  = "1.1.0"
     agent_id = coder_agent.dev.id
     order = 1
+}
+
+# Auto-install the Jupyter extension for the Kiro IDE.
+# Kiro connects as a desktop client and downloads its remote server on first
+# connect, so we install into the (EFS-persistent) Kiro server extensions dir:
+# immediately if the server is already present, otherwise via a one-time
+# background poller. Dependencies resolve automatically from Open VSX.
+resource "coder_script" "kiro_jupyter_extension" {
+    agent_id           = coder_agent.dev.id
+    display_name       = "Kiro: install Jupyter extension"
+    icon               = "/icon/kiro.svg"
+    run_on_start       = true
+    start_blocks_login = false
+    script             = <<-EOT
+    #!/bin/sh
+    set -eu
+    EXT_ID="ms-toolsai.jupyter"
+    KIRO_BIN="$HOME/.kiro-server/bin"
+    SENTINEL="$HOME/.kiro-server/.jupyter-ext-installed"
+
+    if [ -f "$SENTINEL" ]; then
+      echo "Kiro: $EXT_ID already provisioned."
+      exit 0
+    fi
+
+    install_ext() {
+      SRV=$(find "$KIRO_BIN" -maxdepth 3 -type f -name kiro-server 2>/dev/null | head -1)
+      [ -n "$SRV" ] || return 1
+      "$SRV" --install-extension "$EXT_ID" && touch "$SENTINEL"
+    }
+
+    if install_ext; then
+      echo "Kiro: installed $EXT_ID."
+    else
+      # Server not downloaded yet (first connect pending) - poll in background.
+      (
+        i=0
+        while [ "$i" -lt 120 ]; do
+          sleep 30
+          if install_ext; then
+            echo "Kiro: installed $EXT_ID after connect."
+            break
+          fi
+          i=$((i + 1))
+        done
+      ) >/tmp/kiro-jupyter-install.log 2>&1 &
+      echo "Kiro: will install $EXT_ID on first connect (background)."
+    fi
+    EOT
 }
 
 resource "coder_app" "kiro_cli" {
