@@ -222,6 +222,55 @@ module "coder-login" {
     agent_id = coder_agent.dev.id
 }
 
+# Provision a persistent Python 3.12 virtual environment + Jupyter kernel for
+# the workshop agent notebooks (LangGraph/LangChain, LlamaIndex, Strands,
+# Bedrock AgentCore). The venv and kernelspec live on the EFS-persistent home,
+# so this runs once and is reused across restarts. Selectable from Jupyter
+# (code-server / Kiro) and by notebook-aware agents as "Python (Agents)".
+resource "coder_script" "agent_python_kernel" {
+    agent_id           = coder_agent.dev.id
+    display_name       = "Python/Jupyter agent kernel"
+    icon               = "/icon/python.svg"
+    run_on_start       = true
+    start_blocks_login = false
+    script             = <<-EOT
+    #!/bin/sh
+    set -eu
+    VENV="$HOME/.venvs/agents"
+    SENTINEL="$VENV/.provisioned"
+
+    if [ -f "$SENTINEL" ]; then
+      echo "Agent Python kernel already provisioned at $VENV"
+      exit 0
+    fi
+
+    export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
+    export UV_LINK_MODE=copy   # EFS-mounted home: avoid hardlink fallback warnings
+    mkdir -p "$HOME/.venvs"
+
+    # uv (preinstalled) creates the venv without python3-venv and fetches a
+    # managed CPython 3.12 to match the notebooks' kernel.
+    uv venv --python 3.12 --seed "$VENV"
+
+    uv pip install --python "$VENV/bin/python" \
+      ipykernel \
+      "boto3>=1.39.0" "botocore>=1.39.0" "pydantic>=2.0.0" \
+      bedrock-agentcore bedrock-agentcore-starter-toolkit \
+      langchain langchain-core langchain-aws langchain-anthropic langchain-community langgraph \
+      "llama-index>=0.12.0" llama-index-core llama-index-llms-bedrock \
+      llama-index-llms-bedrock-converse llama-index-embeddings-bedrock \
+      llama-index-readers-file llama-cloud \
+      strands-agents strands-agents-tools
+
+    # Register the kernel so Jupyter and notebook-aware agents can select it.
+    "$VENV/bin/python" -m ipykernel install --user \
+      --name agents --display-name "Python (Agents)"
+
+    touch "$SENTINEL"
+    echo "Provisioned Jupyter kernel 'Python (Agents)' -> $VENV"
+    EOT
+}
+
 module "code-server" {
     source   = "registry.coder.com/coder/code-server/coder"
     version  = "1.3.1"
