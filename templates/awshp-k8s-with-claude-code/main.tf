@@ -43,10 +43,77 @@ variable "anthropic_model" {
   default     = "global.anthropic.claude-opus-4-6-v1"
 }
 
+variable "mcp_api_key_fiddler" {
+  type        = string
+  description = "Fiddler AI API key (Bearer) for the Fiddler GenAI MCP server."
+  sensitive   = true
+  default     = ""
+}
+
+variable "fiddler_url" {
+  type        = string
+  description = "Fiddler instance base URL for the Fiddler GenAI MCP server (optional)."
+  default     = "https://app.fiddler.ai"
+}
+
+variable "mcp_api_key_langsmith" {
+  type        = string
+  description = "LangSmith API key (sent as X-Api-Key) for the LangSmith remote MCP server."
+  sensitive   = true
+  default     = ""
+}
+
+variable "mcp_api_key_llamacloud" {
+  type        = string
+  description = "LlamaCloud API key for the LlamaCloud MCP server."
+  sensitive   = true
+  default     = ""
+}
+
+variable "llamacloud_project_name" {
+  type        = string
+  description = "Optional LlamaCloud project name for the LlamaCloud MCP server."
+  default     = ""
+}
+
+variable "llamacloud_index" {
+  type        = string
+  description = "Optional LlamaCloud index ('name:description') exposed as a tool by the LlamaCloud MCP server."
+  default     = ""
+}
+
 locals {
   home_dir = "/home/coder"
   bin_path = "/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   cost     = 2
+
+  # MCP servers added to Claude Code at user scope: Fiddler GenAI (observability)
+  # + LangSmith (LangChain) as remote HTTP, LlamaCloud (LlamaIndex) over stdio via
+  # uvx. Security partners (HiddenLayer, Protopia) have no MCP server; their SDKs
+  # are pre-baked in the image instead.
+  mcp_servers = merge(
+    {
+      "fiddler-genai" = {
+        type    = "http"
+        url     = "${var.fiddler_url}/v1/mcp/genai/"
+        headers = { Authorization = "Bearer ${var.mcp_api_key_fiddler}" }
+      }
+      "langsmith" = {
+        type    = "http"
+        url     = "https://api.smith.langchain.com/mcp"
+        headers = { "X-Api-Key" = var.mcp_api_key_langsmith }
+      }
+      "llamacloud" = {
+        command = "/usr/local/bin/uvx"
+        args = concat(
+          ["llamacloud-mcp@latest", "--api-key", var.mcp_api_key_llamacloud],
+          var.llamacloud_project_name != "" ? ["--project-name", var.llamacloud_project_name] : [],
+          var.llamacloud_index != "" ? ["--index", var.llamacloud_index] : [],
+        )
+      }
+    }
+  )
+  mcp_json = jsonencode({ mcpServers = local.mcp_servers })
 }
 
 # Minimum vCPUs needed 
@@ -272,6 +339,7 @@ module "claude-code" {
     subdomain           = false
     report_tasks        = true
     dangerously_skip_permissions = true
+    mcp                 = local.mcp_json
         
     pre_install_script = <<-EOF
     set -e
