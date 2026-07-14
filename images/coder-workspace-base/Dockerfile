@@ -54,9 +54,16 @@ RUN pip3 install playwright \
 # Baked at build time OUTSIDE /home/coder (which is overlaid by the EFS
 # persistent volume at runtime) so workspaces start fast. Registers a
 # system-wide Jupyter kernel "Python (Agents)" discoverable by code-server/Kiro.
+#
+# GPUs are never enabled on these workspaces, so install CPU-only PyTorch first
+# from the PyTorch CPU index. This satisfies protopia's torch dependency and
+# prevents the multi-GB NVIDIA CUDA wheels (torch's default deps) from being
+# pulled in. --no-cache keeps the uv download cache out of the image layer.
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN uv venv --python 3.12 --seed /opt/venvs/agents \
-    && UV_LINK_MODE=copy uv pip install --python /opt/venvs/agents/bin/python \
+    && UV_LINK_MODE=copy uv pip install --no-cache --python /opt/venvs/agents/bin/python \
+        torch --index-url https://download.pytorch.org/whl/cpu \
+    && UV_LINK_MODE=copy uv pip install --no-cache --python /opt/venvs/agents/bin/python \
         ipykernel \
         "boto3>=1.39.0" "botocore>=1.39.0" "pydantic>=2.0.0" \
         bedrock-agentcore bedrock-agentcore-starter-toolkit \
@@ -69,7 +76,8 @@ RUN uv venv --python 3.12 --seed /opt/venvs/agents \
     && /opt/venvs/agents/bin/python -m ipykernel install --prefix=/usr/local \
         --name agents --display-name "Python (Agents)" \
     && chown -R coder:coder /opt/venvs /opt/uv \
-    && chmod -R a+rX /opt/venvs /opt/uv
+    && chmod -R a+rX /opt/venvs /opt/uv \
+    && rm -rf /root/.cache/uv /root/.cache/pip
 
 # Ensure coder user owns their home directory
 RUN chown -R coder:coder /home/coder
