@@ -20,6 +20,36 @@ Parameters:
 Resources:
 ################## ECR Repositories #####################
 
+  BaseImageRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${EKSClusterName}/coder-workspace-base'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only last 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub '${EKSClusterName}-coder-workspace-base'
+
   ClaudeCodeImageRepo:
     Type: AWS::ECR::Repository
     Properties:
@@ -144,6 +174,7 @@ Resources:
                   - ecr:DescribeRepositories
                   - ecr:ListImages
                 Resource:
+                  - !GetAtt BaseImageRepo.Arn
                   - !GetAtt ClaudeCodeImageRepo.Arn
                   - !GetAtt KiroCliImageRepo.Arn
                   - !GetAtt ChallengeImageRepo.Arn
@@ -174,6 +205,8 @@ Resources:
             Value: !Ref AWS::AccountId
           - Name: AWS_REGION
             Value: !Ref AWS::Region
+          - Name: BASE_REPO_URI
+            Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-base'
           - Name: CLAUDE_CODE_REPO_URI
             Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-claude-code'
           - Name: KIRO_CLI_REPO_URI
@@ -199,24 +232,34 @@ Resources:
                 - echo "Building from commit $COMMIT_SHA"
             build:
               commands:
-                - echo "Building Claude Code workspace image..."
+                - echo "Building shared base image (common libraries/packages)..."
                 - |
                   for i in 1 2 3; do
-                    docker build -t $CLAUDE_CODE_REPO_URI:latest -t $CLAUDE_CODE_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-claude-code/ && break
+                    docker build -t $BASE_REPO_URI:latest -t $BASE_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-base/ && break
+                    echo "Base build attempt $i failed, waiting 60s before retry..."
+                    sleep 60
+                  done
+                - echo "Pushing base image so derived builds and future runs can reuse it..."
+                - docker push $BASE_REPO_URI:latest
+                - docker push $BASE_REPO_URI:$COMMIT_SHA
+                - echo "Building Claude Code workspace image (FROM base)..."
+                - |
+                  for i in 1 2 3; do
+                    docker build --build-arg BASE_IMAGE=$BASE_REPO_URI:latest -t $CLAUDE_CODE_REPO_URI:latest -t $CLAUDE_CODE_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-claude-code/ && break
                     echo "Build attempt $i failed, waiting 60s before retry..."
                     sleep 60
                   done
-                - echo "Building Kiro CLI workspace image..."
+                - echo "Building Kiro CLI workspace image (FROM base)..."
                 - |
                   for i in 1 2 3; do
-                    docker build -t $KIRO_CLI_REPO_URI:latest -t $KIRO_CLI_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-kiro-cli/ && break
+                    docker build --build-arg BASE_IMAGE=$BASE_REPO_URI:latest -t $KIRO_CLI_REPO_URI:latest -t $KIRO_CLI_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-kiro-cli/ && break
                     echo "Build attempt $i failed, waiting 60s before retry..."
                     sleep 60
                   done
-                - echo "Building Challenge workspace image..."
+                - echo "Building Challenge workspace image (FROM base)..."
                 - |
                   for i in 1 2 3; do
-                    docker build -t $CHALLENGE_REPO_URI:latest -t $CHALLENGE_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-challenge/ && break
+                    docker build --build-arg BASE_IMAGE=$BASE_REPO_URI:latest -t $CHALLENGE_REPO_URI:latest -t $CHALLENGE_REPO_URI:$COMMIT_SHA source-repo/images/coder-workspace-challenge/ && break
                     echo "Build attempt $i failed, waiting 60s before retry..."
                     sleep 60
                   done
@@ -344,13 +387,19 @@ Resources:
     Type: Custom::TriggerBuild
     DependsOn:
       - ImageBuildProject
+      - BaseImageRepo
       - ClaudeCodeImageRepo
       - KiroCliImageRepo
+      - ChallengeImageRepo
     Properties:
       ServiceToken: !GetAtt TriggerBuildLambda.Arn
       ProjectName: !Ref ImageBuildProject
 
 Outputs:
+  BaseImageUri:
+    Description: ECR URI for the shared base workspace image
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-base:latest'
+
   ClaudeCodeImageUri:
     Description: ECR URI for Claude Code workspace image
     Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-claude-code:latest'
