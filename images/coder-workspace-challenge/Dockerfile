@@ -86,6 +86,7 @@ RUN uv venv --python 3.12 --seed /opt/venvs/agents \
         llama-index-llms-bedrock-converse llama-index-embeddings-bedrock \
         llama-index-readers-file llama-cloud \
         strands-agents strands-agents-tools \
+        hiddenlayer-sdk protopia \
     && /opt/venvs/agents/bin/python -m ipykernel install --prefix=/usr/local \
         --name agents --display-name "Python (Agents)" \
     && chown -R coder:coder /opt/venvs /opt/uv \

@@ -37,22 +37,75 @@ variable "efs_file_system_id" {
   default     = ""
 }
 
-variable "mcp_bearer_token_pulumi" {
+variable "mcp_api_key_fiddler" {
   type        = string
-  description = "Your Pulumi MCP bearer token. This provides access to Pulumi MCP Server via Kiro CLI."
+  description = "Fiddler AI API key (Bearer) for the Fiddler GenAI MCP server."
   sensitive   = true
-  default     = "pul-xxxx-xxx-xxxx"
+  default     = ""
 }
 
-variable "mcp_bearer_token_launchdarkly" {
+variable "fiddler_url" {
   type        = string
-  description = "Your LaunchDarkly MCP API Key. This provides access to LaunchDarkly MCP Server via Kiro CLI."
+  description = "Fiddler instance base URL for the Fiddler GenAI MCP server (optional)."
+  default     = "https://app.fiddler.ai"
+}
+
+variable "mcp_api_key_langsmith" {
+  type        = string
+  description = "LangSmith API key (sent as X-Api-Key) for the LangSmith remote MCP server."
   sensitive   = true
-  default     = "api-xxxx-xxx-xxxx"
+  default     = ""
+}
+
+variable "mcp_api_key_llamacloud" {
+  type        = string
+  description = "LlamaCloud API key for the LlamaCloud MCP server."
+  sensitive   = true
+  default     = ""
+}
+
+variable "llamacloud_project_name" {
+  type        = string
+  description = "Optional LlamaCloud project name for the LlamaCloud MCP server."
+  default     = ""
+}
+
+variable "llamacloud_index" {
+  type        = string
+  description = "Optional LlamaCloud index ('name:description') exposed as a tool by the LlamaCloud MCP server."
+  default     = ""
 }
 
 locals {
   home_dir        = "/home/coder"
+
+  # MCP servers shared by Kiro (mcp.json) and Claude Code (user scope):
+  # Fiddler GenAI (observability) + LangSmith (LangChain) as remote HTTP,
+  # LlamaCloud (LlamaIndex) over stdio via uvx. Security partners (HiddenLayer,
+  # Protopia) have no MCP server; their SDKs are pre-baked in the image instead.
+  mcp_servers = merge(
+    {
+      "fiddler-genai" = {
+        type    = "http"
+        url     = "${var.fiddler_url}/v1/mcp/genai/"
+        headers = { Authorization = "Bearer ${var.mcp_api_key_fiddler}" }
+      }
+      "langsmith" = {
+        type    = "http"
+        url     = "https://api.smith.langchain.com/mcp"
+        headers = { "X-Api-Key" = var.mcp_api_key_langsmith }
+      }
+      "llamacloud" = {
+        command = "/usr/local/bin/uvx"
+        args = concat(
+          ["llamacloud-mcp@latest", "--api-key", var.mcp_api_key_llamacloud],
+          var.llamacloud_project_name != "" ? ["--project-name", var.llamacloud_project_name] : [],
+          var.llamacloud_index != "" ? ["--index", var.llamacloud_index] : [],
+        )
+      }
+    }
+  )
+  mcp_json = jsonencode({ mcpServers = local.mcp_servers })
 }
 
 # Minimum vCPUs needed 
@@ -145,40 +198,13 @@ resource "coder_agent" "dev" {
     # Update PATH for current session
     export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$PATH"
 
-    # Configure Kiro CLI MCP servers
+    # Configure Kiro CLI MCP servers (Fiddler GenAI, LangSmith, LlamaCloud)
     echo "Configuring Kiro CLI MCP servers..."
 
     # Create user-level MCP configuration
     mkdir -p $HOME/.kiro/settings
-    cat > $HOME/.kiro/settings/mcp.json <<MCP_EOF
-{
-  "mcpServers": {
-    "pulumi": {
-      "headers": {
-        "Authorization": "Bearer ${var.mcp_bearer_token_pulumi}"
-      },
-      "type": "http",
-      "url": "https://mcp.ai.pulumi.com/mcp"
-    },
-    "LaunchDarkly": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "--package",
-        "@launchdarkly/mcp-server",
-        "--",
-        "mcp",
-        "start",
-        "--api-key",
-        "${var.mcp_bearer_token_launchdarkly}"
-      ]
-    },
-    "arize-tracing-assistant": {
-      "command": "/home/coder/.local/bin/uvx",
-      "args": ["arize-tracing-assistant@latest"]
-    }
-  }
-}
+    cat > $HOME/.kiro/settings/mcp.json <<'MCP_EOF'
+${local.mcp_json}
 MCP_EOF
 
     echo "Kiro CLI MCP configuration completed (user-level)"
