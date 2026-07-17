@@ -228,7 +228,7 @@ Resources:
                   ## CFN for knowledge bases creation
                   ## for Lyzr\Arize user need to create correct Cross Account role - its precreated but in a case smth incorrect
                   - bedrock:*
-                  ## access to models
+                  - bedrock-agentcore:*
                   - aws-marketplace:ViewSubscriptions
                   - aws-marketplace:Subscribe
                   - s3:*
@@ -299,6 +299,7 @@ Resources:
                   - kms:*
                   - cloudformation:*
                   - ecr:*
+                  - codebuild:*
                   - elasticfilesystem:*
                   - events:Describe*
                   - events:List*
@@ -1345,6 +1346,12 @@ Resources:
                       ./templates_gitops.sh $CODER_SESSION_TOKEN
                     fi
                     
+                    # Use CLOUDFRONT_DOMAIN env var directly 
+                    SSM_CODER_URL="https://${CLOUDFRONT_DOMAIN}"
+                    echo "Setting SSM parameters..."
+                    echo "SSM_CODER_URL: ${SSM_CODER_URL}"
+                    aws configure set cli_follow_urlparam false
+                    aws ssm put-parameter --name "coder-cloudfront-url" --value "${SSM_CODER_URL}" --type "String" --overwrite
                     aws ssm put-parameter --name "/eks/${EKSClusterName}/cluster-name" --value "${EKSClusterName}" --type "String" --overwrite
                     aws ssm put-parameter --name "/eks/${EKSClusterName}/region" --value "${AWSRegion}" --type "String" --overwrite
                   fi
@@ -1511,8 +1518,8 @@ Outputs:
     Value: !Ref CoderAdminEmail
 
   CoderAdminPassword:
-    Description: Coder Admin Password (stored in Secrets Manager)
-    Value: !Sub '{{resolve:secretsmanager:${CoderAdminPasswordSecret}:SecretString}}'
+    Description: Coder Admin Password - retrieve from Secrets Manager using the ARN below
+    Value: !Sub 'Stored in Secrets Manager: ${CoderAdminPasswordSecret}'
 
   CoderAdminPasswordSecretArn:
     Description: ARN of the Coder Admin Password Secret
