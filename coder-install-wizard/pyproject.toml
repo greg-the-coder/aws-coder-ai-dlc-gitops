@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "coder-install-wizard"
+version = "0.1.0"
+description = "GenAI-assisted production install wizard for Coder on AWS"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+keywords = ["coder", "aws", "eks", "devtools", "installer"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Installation/Setup",
+]
+
+# No third-party runtime deps — uses only stdlib + the AWS CLI (expected in PATH).
+dependencies = []
+
+[project.scripts]
+coder-wizard = "coder_wizard.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/greg-the-coder/aws-coder-ai-dlc-gitops"
+Source   = "https://github.com/greg-the-coder/aws-coder-ai-dlc-gitops"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["coder_wizard*"]
