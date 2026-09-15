@@ -5,7 +5,8 @@
 terraform {
   required_providers {
     coderd = {
-      source = "coder/coderd"
+      source  = "coder/coderd"
+      version = ">= 0.0.25"
     }
   }
 }
@@ -50,6 +51,12 @@ variable "challenge_image" {
   default     = ""
 }
 
+variable "codex_image" {
+  type        = string
+  description = "ECR image URI for Codex workspace (reuses the Claude Code workspace image, which already ships node/npm/uv)"
+  default     = ""
+}
+
 variable "efs_file_system_id" {
   type        = string
   description = "EFS file system ID for persistent workspace storage"
@@ -68,7 +75,7 @@ provider "coderd" {
 resource "coderd_template" "awshp-k8s-with-claude-code" {
   name        = "awshp-k8s-base-claudecode"
   display_name = "AWS Workshop - Kubernetes with Claude Code"
-  description = "Fargate workspace with Claude Code AI assistant + task automation, AWS CLI/CDK, Node.js, and Bedrock access."
+  description = "Fargate Claude Code workspace routed via the Coder AI Gateway, with AWS Labs MCP servers, AWS CLI/CDK, and Bedrock."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-claude-code"
@@ -93,7 +100,7 @@ resource "coderd_template" "awshp-k8s-with-claude-code" {
 resource "coderd_template" "awshp-k8s-with-kiro_cli" {
   name        = "awshp-k8s-base-kirocli"
   display_name = "AWS Workshop - Kubernetes with Kiro CLI"
-  description = "Fargate workspace with Kiro CLI AI assistant, AWS CLI/CDK, Node.js, and Bedrock access."
+  description = "Fargate Kiro CLI workspace with AWS Labs MCP servers, AWS CLI/CDK, Node.js, and Bedrock access."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-kiro-cli"
@@ -115,14 +122,39 @@ resource "coderd_template" "awshp-k8s-with-kiro_cli" {
   }]
 }
 
+resource "coderd_template" "awshp-k8s-with-codex" {
+  name        = "awshp-k8s-base-codex"
+  display_name = "AWS Workshop - Kubernetes with OpenAI Codex"
+  description = "Fargate OpenAI Codex CLI workspace via the Coder AI Gateway (GPT-5.6 Sol on Bedrock), with AWS Labs MCP servers and AWS CLI/CDK"
+  icon = "/icon/k8s.png"
+  versions = [{
+    directory = "./awshp-k8s-with-codex"
+    active    = true
+    # Version name is optional
+    name = var.coder_gitsha
+    tf_vars = [{
+      name  = "namespace"
+      value = "coder-ws"
+    },
+    {
+      name  = "workspace_image"
+      value = var.codex_image
+    },
+    {
+      name  = "efs_file_system_id"
+      value = var.efs_file_system_id
+    }]
+  }]
+}
+
 ###########################################################
-# Challenge Templates - Clash of Agents Workshop
+# AI Agent Development Template
 ###########################################################
 
 resource "coderd_template" "challenge-agent" {
   name        = "awshp-k8s-challenge-agent"
-  display_name = "Clash of Agents - Challenge Workspace"
-  description = "Optimized for Coder Agents: Python agent frameworks (Strands, LangGraph, LlamaIndex, Lyzr) + Bedrock on Fargate."
+  display_name = "AWS Workshop - AI Agent Development"
+  description = "Build and deploy AI agents to AWS on Fargate: Strands, LangGraph, LangChain, LlamaIndex, Lyzr + Bedrock and AWS CDK/CLI."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-challenge-agent"

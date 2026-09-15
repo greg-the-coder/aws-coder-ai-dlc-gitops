@@ -110,19 +110,36 @@ coder:
   #  prometheus.io/scrape: "true"
 
   # ---------------------------------------------------------------------
-  # AI Gateway (formerly "AI Bridge") + Coder Agents + Tracing
+  # Coder AI Gateway + Coder Agents + Tracing
   # ---------------------------------------------------------------------
-  # AI Gateway is enabled by default in v2.34
-  # Coder Agents (the in-control-plane agent loop) is available once AI
-  # Gateway is enabled and at least one provider is configured.
+  # The Coder AI Gateway (CODER_AI_GATEWAY_ENABLED) is on by default in
+  # v2.36.0+; the deprecated CODER_AIBRIDGE_* aliases still work but should
+  # not be used. Coder Agents (the in-control-plane agent loop) is available
+  # once the AI Gateway is enabled and at least one provider is configured.
   - name: CODER_TRACE_ENABLE
     value: "true"
   # Hide the "Tasks" tab in the dashboard
   - name: CODER_HIDE_AI_TASKS
     value: "true"
+  # BYOK: allow users to bring their own model keys through the AI Gateway.
+  - name: CODER_AI_GATEWAY_ALLOW_BYOK
+    value: "true"
 
-  # Enable HA for Coderd
-  replicaCount: 1
+  # ---------------------------------------------------------------------
+  # Control-plane experiments
+  # ---------------------------------------------------------------------
+  # oauth2: OAuth2 provider endpoints. mcp-server-http: streamable HTTP MCP server
+  # (required to register the remote AWS Knowledge MCP server with Coder Agents).
+  - name: CODER_EXPERIMENTS
+    value: "oauth2,mcp-server-http"
+  # Allow embedding *.<wildcard> app subdomains (patched to the CloudFront domain at
+  # deploy time by the same sed that rewrites CODER_WILDCARD_ACCESS_URL below).
+  - name: CODER_ADDITIONAL_CSP_POLICY
+    value: "frame-src https://*.coder.example.com"
+
+  # Enable HA for Coderd (requires a Premium/Enterprise license, supplied via
+  # the CoderLicenseKey deployment parameter).
+  replicaCount: 2
 
   resources:
     limits:

@@ -9,7 +9,7 @@ Parameters:
   CoderVersion:
     Description: Coder version
     Type: String
-    Default: "2.34.4"
+    Default: "2.37.0"
 
   EKSClusterName:
     Description: Name of EKS Cluster
@@ -196,7 +196,7 @@ Resources:
   WorkshopCoderRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: coder-and-aws-workshop-user
+      RoleName: !Sub '${EKSClusterName}-workshop-user'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -345,7 +345,7 @@ Resources:
     DependsOn: WorkshopCoderRole
     Properties:
       Path: "/"
-      InstanceProfileName: !Sub "coder-workshop-ec2-workspace-profile"
+      InstanceProfileName: !Sub '${EKSClusterName}-ec2-workspace-profile'
       Roles:
         - !Ref WorkshopCoderRole
 
@@ -366,28 +366,25 @@ Resources:
                   - bedrock:Converse
                   - bedrock:ConverseStream
                 Resource: '*'
-              - Effect: Allow
-                Action:
-                  - bedrock-mantle:*
-                Resource: '*'
       Tags:
         - Key: Purpose
-          Value: CoderAIGatewayBedrockMantleKey
+          Value: CoderAIGatewayBedrockOpenAIKey
         - Key: ManagedBy
           Value: !Ref AWS::StackName
 
-  BedrockMantleApiKeySecret:
+  BedrockOpenAIApiKeySecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub 'coder-bedrock-mantle-api-key-${AWS::StackName}'
+      Name: !Sub 'coder-bedrock-openai-api-key-${AWS::StackName}'
       Description: !Sub >-
-        Bedrock Mantle ServiceCredentialSecret for Coder AI Gateway openai-compat provider.
+        Amazon Bedrock API key (bedrock.amazonaws.com ServiceCredentialSecret) for the Coder
+        AI Gateway openai-compat provider (bedrock-runtime /openai/v1 endpoint).
         IAM user: coder-bedrock-api-key-user-${AWS::StackName}.
         Populated by CodeBuild post_build.
       SecretString: 'PENDING_CODEBUILD_POPULATION'
       Tags:
         - Key: Purpose
-          Value: CoderAIGatewayBedrockMantleKey
+          Value: CoderAIGatewayBedrockOpenAIKey
         - Key: ManagedBy
           Value: !Ref AWS::StackName
 
@@ -653,12 +650,14 @@ Resources:
 
   EfsFileSystem:
     Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Encrypted: true
       ThroughputMode: elastic
       FileSystemTags:
         - Key: Name
-          Value: !Sub '${EKSClusterName}-coder-workspace-homes'
+          Value: !Sub '${EKSClusterName}-workspace-homes'
 
   EfsMountTarget1:
     Type: AWS::EFS::MountTarget
@@ -681,7 +680,7 @@ Resources:
   CoderAdminPasswordSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub '${EKSClusterName}-coder-admin-password'
+      Name: !Sub '${EKSClusterName}-admin-password'
       Description: Coder Administrator Password
       GenerateSecretString:
         PasswordLength: 12
@@ -693,7 +692,7 @@ Resources:
   CoderSessionTokenSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub 'partner-coder-session-token'
+      Name: !Sub '${EKSClusterName}-session-token'
       Description: Coder Session Token for API access
 
 ################## Aurora PostgreSQL #####################
@@ -727,7 +726,7 @@ Resources:
   CoderAuroraSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupName: coderaurorasubnetgroup
+      DBSubnetGroupName: !Sub '${EKSClusterName}-aurora-subnet-group'
       DBSubnetGroupDescription: "Subnet group for Coder' Aurora PostgreSQL - same as EKS cluster"
       SubnetIds: 
         - !Ref PrivateSubnet1
@@ -736,8 +735,10 @@ Resources:
   # Create Aurora PostgreSQL Serverless cluster
   CoderAuroraCluster:
     Type: AWS::RDS::DBCluster
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      DBClusterIdentifier: !Ref DatabaseName
+      DBClusterIdentifier: !Sub '${EKSClusterName}-aurora'
       Engine: aurora-postgresql
       EngineVersion: '16.11'
       MasterUsername: !Ref Username
@@ -756,8 +757,10 @@ Resources:
   # Create Aurora PostgreSQL instance
   CoderAuroraInstance:
     Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      DBInstanceIdentifier: !Sub '${DatabaseName}-instance'
+      DBInstanceIdentifier: !Sub '${EKSClusterName}-aurora-instance'
       DBInstanceClass: db.serverless
       Engine: aurora-postgresql
       DBClusterIdentifier: !Ref CoderAuroraCluster
@@ -836,6 +839,8 @@ Resources:
             Value: !Ref CoderGitOpsTemplateRepoURL  
           - Name: CoderSessionTokenSecretArn
             Value: !Ref CoderSessionTokenSecret  
+          - Name: WorkshopRoleName
+            Value: !Ref WorkshopCoderRole
           - Name: CLOUDFRONT_DISTRIBUTION_ID
             Value: !Ref CoderCloudFrontDistribution
           - Name: CLOUDFRONT_DOMAIN
@@ -854,8 +859,8 @@ Resources:
             Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-kiro-cli:latest'
           - Name: ChallengeImageUri
             Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-challenge:latest'
-          - Name: BEDROCK_MANTLE_SECRET_ARN
-            Value: !Ref BedrockMantleApiKeySecret
+          - Name: BEDROCK_OPENAI_SECRET_ARN
+            Value: !Ref BedrockOpenAIApiKeySecret
           
       Source:
         Type: NO_SOURCE
@@ -918,7 +923,10 @@ Resources:
               commands:
                 - echo ">>> creating EKS cluster in region $AWSRegion with Auto Mode"
                 - |
-                  if [ "$RetryFlag" != "True" ]; then
+                  if aws eks describe-cluster --name "${EKSClusterName}" --region "${AWSRegion}" >/dev/null 2>&1; then
+                    echo "EKS cluster ${EKSClusterName} already exists; skipping creation (idempotent re-run)."
+                    export BUILD_SUCCESS=true
+                  elif [ "$RetryFlag" != "True" ]; then
                     if eksctl create cluster -f cluster-config.yaml; then
                       export BUILD_SUCCESS=true
                       echo "EKS cluster creation successful"
@@ -940,6 +948,14 @@ Resources:
                   cat > post_build.sh << 'POST_EOF'
                   #!/bin/bash
                   set -e
+
+                  # Signal CloudFormation FAILURE immediately on any error so the
+                  # WaitCondition fails fast instead of waiting out its 45-min timeout.
+                  signal_failure() {
+                    [ -n "$WAIT_HANDLE_URL" ] || return 0
+                    curl -sf -X PUT -H "Content-Type:" --data-binary "{\"Status\":\"FAILURE\",\"Reason\":\"CodeBuild post_build failed\",\"UniqueId\":\"EKSCluster\",\"Data\":\"post_build failed\"}" "$WAIT_HANDLE_URL" || true
+                  }
+                  trap 'rc=$?; if [ "$rc" -ne 0 ]; then signal_failure; fi' EXIT
                   
                   if [ "$BUILD_SUCCESS" = "true" ]; then
                     echo "EKS cluster creation successful"
@@ -955,6 +971,9 @@ Resources:
                     
                     git clone $CoderGitOpsTemplateRepoURL
                     CODER_GITOPS_DIR=$(basename "$CoderGitOpsTemplateRepoURL" .git)
+                    # Absolute path to the clone — later steps cd into subdirs (e.g.
+                    # templates/), so relative "$CODER_GITOPS_DIR/..." paths break.
+                    CODER_GITOPS_ABS="$(cd "$CODER_GITOPS_DIR" && pwd)"
 
                     cp "$CODER_GITOPS_DIR/infrastructure/k8s/gp3-storageclass.yaml" storageclass.yaml
                     cp "$CODER_GITOPS_DIR/infrastructure/helm/coder-values.yaml" coder-core-values-v2.yaml
@@ -986,7 +1005,7 @@ Resources:
                       echo "Fargate profile is ACTIVE"
 
                       PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
-                      kubectl create secret generic coder-db-url -n coder --from-literal=url="$PostgreSQLConnectionURL"
+                      kubectl create secret generic coder-db-url -n coder --from-literal=url="$PostgreSQLConnectionURL" --dry-run=client -o yaml | kubectl apply -f -
                  
                       helm install coder coder-v2/coder --namespace coder --values coder-core-values-v2.yaml --version "${CoderVersion}"
                     fi
@@ -1007,38 +1026,43 @@ Resources:
                       --cluster-name ${EKSClusterName} \
                       --namespace coder \
                       --service-account coder \
-                      --role-arn arn:aws:iam::$ACCOUNT_ID:role/coder-and-aws-workshop-user
+                      --role-arn arn:aws:iam::$ACCOUNT_ID:role/${WorkshopRoleName}
 
                       echo "Configuring IRSA for Fargate workspace pods..."
                       
                       chmod +x "$CODER_GITOPS_DIR/infrastructure/scripts/irsa-trust-policy-update.sh"
                       "$CODER_GITOPS_DIR/infrastructure/scripts/irsa-trust-policy-update.sh" \
                         "${EKSClusterName}" \
-                        "coder-and-aws-workshop-user" \
+                        "${WorkshopRoleName}" \
                         "coder-ws" \
                         "coder-ws"
                       
-                      sed "s|PLACEHOLDER_ROLE_ARN|arn:aws:iam::${ACCOUNT_ID}:role/coder-and-aws-workshop-user|g" "$CODER_GITOPS_DIR/infrastructure/k8s/coder-ws-serviceaccount.yaml" \
+                      sed "s|PLACEHOLDER_ROLE_ARN|arn:aws:iam::${ACCOUNT_ID}:role/${WorkshopRoleName}|g" "$CODER_GITOPS_DIR/infrastructure/k8s/coder-ws-serviceaccount.yaml" \
                         | kubectl apply -f -
                       echo "Created coder-ws service account with IRSA annotation"
                     fi
 
                     if [ -n "$CODER_LB_HOSTNAME" ]; then
-                      echo "Updating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID with origin $CODER_LB_HOSTNAME"
+                      CURRENT_CF_ORIGIN=$(aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID" --query 'DistributionConfig.Origins.Items[0].DomainName' --output text 2>/dev/null || echo "")
+                      if [ "$CURRENT_CF_ORIGIN" = "$CODER_LB_HOSTNAME" ]; then
+                        echo "CloudFront origin already points to $CODER_LB_HOSTNAME; skipping distribution update (idempotent re-run)."
+                      else
+                        echo "Updating CloudFront distribution $CLOUDFRONT_DISTRIBUTION_ID with origin $CODER_LB_HOSTNAME"
 
-                      CF_CONFIG=$(aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID")
-                      ETAG=$(echo "$CF_CONFIG" | jq -r '.ETag')
-                      DIST_CONFIG=$(echo "$CF_CONFIG" | jq '.DistributionConfig')
+                        CF_CONFIG=$(aws cloudfront get-distribution-config --id "$CLOUDFRONT_DISTRIBUTION_ID")
+                        ETAG=$(echo "$CF_CONFIG" | jq -r '.ETag')
+                        DIST_CONFIG=$(echo "$CF_CONFIG" | jq '.DistributionConfig')
 
-                      UPDATED_CONFIG=$(echo "$DIST_CONFIG" | jq --arg hostname "$CODER_LB_HOSTNAME" \
-                        '.Origins.Items[0].DomainName = $hostname')
+                        UPDATED_CONFIG=$(echo "$DIST_CONFIG" | jq --arg hostname "$CODER_LB_HOSTNAME" \
+                          '.Origins.Items[0].DomainName = $hostname')
 
-                      echo "$UPDATED_CONFIG" > updated-cf-config.json
+                        echo "$UPDATED_CONFIG" > updated-cf-config.json
 
-                      aws cloudfront update-distribution \
-                        --id "$CLOUDFRONT_DISTRIBUTION_ID" \
-                        --distribution-config file://updated-cf-config.json \
-                        --if-match "$ETAG"
+                        aws cloudfront update-distribution \
+                          --id "$CLOUDFRONT_DISTRIBUTION_ID" \
+                          --distribution-config file://updated-cf-config.json \
+                          --if-match "$ETAG"
+                      fi
 
                       DISTRIBUTION_ID="$CLOUDFRONT_DISTRIBUTION_ID"
 
@@ -1066,7 +1090,21 @@ Resources:
                       sed -i "s|https://coder.example.com|$CODER_CLOUDFRONT_URL|g" coder-core-values-v2.yaml
                       sed -i "s|\*.coder.example.com|$CODER_CLOUDFRONT_WILDCARD|g" coder-core-values-v2.yaml
                       helm upgrade coder coder-v2/coder --namespace coder --values coder-core-values-v2.yaml --version "${CoderVersion}"
-                      
+
+                      # Ensure coder-db-url matches the current Aurora endpoint. On a RetryFlag=True
+                      # re-run the Aurora cluster may have been recreated with a new endpoint; refresh
+                      # the secret (idempotent) and restart coder so it reconnects. No-op on a fresh
+                      # deploy where the value is already current.
+                      PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
+                      if kubectl -n coder get secret coder-db-url >/dev/null 2>&1; then
+                        EXISTING_DB_URL=$(kubectl -n coder get secret coder-db-url -o jsonpath='{.data.url}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+                        if [ "$EXISTING_DB_URL" != "$PostgreSQLConnectionURL" ]; then
+                          echo "coder-db-url differs from the current Aurora endpoint; refreshing and restarting coder."
+                          kubectl -n coder create secret generic coder-db-url --from-literal=url="$PostgreSQLConnectionURL" --dry-run=client -o yaml | kubectl apply -f -
+                          kubectl -n coder rollout restart deploy/coder || true
+                        fi
+                      fi
+
                       kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=coder -n coder --timeout=300s
 
                       echo "Cycling CloudFront connection pool..."
@@ -1148,16 +1186,19 @@ Resources:
                         CODER_URL="${CODER_CLOUDFRONT_URL}"
                         BEDROCK_REGION="us-east-1"  # Anthropic inference profiles available in us-east-1
                         BEDROCK_ENDPOINT="https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com"
-                        BEDROCK_MANTLE_ENDPOINT="https://bedrock-mantle.${BEDROCK_REGION}.api.aws/v1"
+                        BEDROCK_OPENAI_ENDPOINT="https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com/openai/v1"
                         BEDROCK_USER="coder-bedrock-api-key-user-${STACK_NAME}"
 
                         EXISTING_SECRET=$(aws secretsmanager get-secret-value \
-                          --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
+                          --secret-id "${BEDROCK_OPENAI_SECRET_ARN}" \
                           --region "${AWSRegion}" \
                           --query SecretString --output text 2>/dev/null || echo "")
 
                         if [ -z "${EXISTING_SECRET}" ] || [ "${EXISTING_SECRET}" = "PENDING_CODEBUILD_POPULATION" ]; then
-                          echo "Creating Bedrock service-specific credential for ${BEDROCK_USER}..."
+                          # An Amazon Bedrock API key = a bedrock.amazonaws.com IAM service-specific
+                          # credential (ABSK...), valid as a bearer key on the bedrock-runtime
+                          # native OpenAI-compatible endpoint (/openai/v1).
+                          echo "Creating Bedrock API key (service-specific credential) for ${BEDROCK_USER}..."
                           for CRED_ID in $(aws iam list-service-specific-credentials \
                             --user-name "${BEDROCK_USER}" \
                             --service-name bedrock.amazonaws.com \
@@ -1172,146 +1213,33 @@ Resources:
                             --user-name "${BEDROCK_USER}" \
                             --service-name bedrock.amazonaws.com \
                             --credential-age-days 30)
-                          BEDROCK_MANTLE_KEY=$(echo "${CRED_JSON}" | python3 -c \
+                          BEDROCK_OPENAI_KEY=$(echo "${CRED_JSON}" | python3 -c \
                             "import json,sys; print(json.load(sys.stdin)['ServiceSpecificCredential']['ServiceCredentialSecret'])")
                           aws secretsmanager put-secret-value \
-                            --secret-id "${BEDROCK_MANTLE_SECRET_ARN}" \
-                            --secret-string "${BEDROCK_MANTLE_KEY}" \
+                            --secret-id "${BEDROCK_OPENAI_SECRET_ARN}" \
+                            --secret-string "${BEDROCK_OPENAI_KEY}" \
                             --region "${AWSRegion}"
                           echo "ServiceCredentialSecret stored in Secrets Manager."
                         else
-                          echo "Bedrock Mantle secret already populated; reusing."
-                          BEDROCK_MANTLE_KEY="${EXISTING_SECRET}"
+                          echo "Bedrock API key secret already populated; reusing."
+                          BEDROCK_OPENAI_KEY="${EXISTING_SECRET}"
                         fi
 
-                        echo "Configuring AWS Bedrock (native) provider..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/v2/ai/providers" \
-                          -d "{\"type\":\"bedrock\",\"name\":\"bedrock\",\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-6-v1\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}" \
-                          || curl -sf -X PATCH \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/v2/ai/providers/bedrock" \
-                          -d "{\"display_name\":\"AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_ENDPOINT}\",\"settings\":{\"_type\":\"bedrock\",\"_version\":1,\"model\":\"global.anthropic.claude-opus-4-6-v1\",\"region\":\"${BEDROCK_REGION}\",\"small_fast_model\":\"global.anthropic.claude-haiku-4-5-20251001-v1:0\"}}"
-                        echo "Bedrock (native) provider configured."
+                        echo "=== Configuring Coder AI Providers + Models via Terraform (coderd) ==="
+                        # Providers and Coder Agents models are managed declaratively in
+                        # $CODER_GITOPS_DIR/ai-providers via the coderd Terraform provider,
+                        # replacing the direct /api/v2/ai/providers and
+                        # /api/experimental/chats/model-configs API calls.
+                        export CODER_AGENT_URL="${CODER_URL}"
+                        export BEDROCK_REGION BEDROCK_ENDPOINT BEDROCK_OPENAI_ENDPOINT
+                        export BEDROCK_MODEL="global.anthropic.claude-opus-4-6-v1"
+                        export BEDROCK_SMALL_FAST_MODEL="global.anthropic.claude-haiku-4-5-20251001-v1:0"
+                        export BEDROCK_OPENAI_KEY
 
-                        echo "Configuring OpenAI-compat Bedrock Mantle provider..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/v2/ai/providers" \
-                          -d "{\"type\":\"openai\",\"name\":\"openai-compat\",\"display_name\":\"OpenAI via AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_MANTLE_ENDPOINT}\",\"api_keys\":[\"${BEDROCK_MANTLE_KEY}\"]}" \
-                          || curl -sf -X PATCH \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/v2/ai/providers/openai-compat" \
-                          -d "{\"display_name\":\"OpenAI via AWS Bedrock\",\"enabled\":true,\"base_url\":\"${BEDROCK_MANTLE_ENDPOINT}\",\"api_keys\":[\"${BEDROCK_MANTLE_KEY}\"]}"
-                        echo "OpenAI-compat Bedrock Mantle provider configured."
-
-                        echo "Configuring Chat Model Configs..."
-
-                        BEDROCK_PROVIDER_ID=$(curl -sf \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          "${CODER_URL}/api/v2/ai/providers/bedrock" \
-                          | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
-                        echo "Bedrock provider ID: ${BEDROCK_PROVIDER_ID}"
-
-                        OPENAI_PROVIDER_ID=$(curl -sf \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          "${CODER_URL}/api/v2/ai/providers/openai-compat" \
-                          | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
-                        echo "OpenAI-compat provider ID: ${OPENAI_PROVIDER_ID}"
-
-
-                        echo "Adding model: Claude Opus 4.6 (Bedrock)..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/experimental/chats/model-configs" \
-                          -d "{
-                            \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
-                            \"model\": \"global.anthropic.claude-opus-4-6-v1\",
-                            \"display_name\": \"Claude Opus 4.6\",
-                            \"enabled\": true,
-                            \"is_default\": true,
-                            \"context_limit\": 1000000,
-                            \"model_config\": {
-                              \"max_output_tokens\": 128000,
-                              \"provider_options\": {
-                                \"anthropic\": {
-                                  \"send_reasoning\": true,
-                                  \"effort\": \"high\"
-                                }
-                              }
-                            }
-                          }" || echo "  (may already exist)"
-
-                        echo "Adding model: Claude Haiku 4.5 (Bedrock)..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/experimental/chats/model-configs" \
-                          -d "{
-                            \"ai_provider_id\": \"${BEDROCK_PROVIDER_ID}\",
-                            \"model\": \"global.anthropic.claude-haiku-4-5-20251001-v1:0\",
-                            \"display_name\": \"Claude Haiku 4.5\",
-                            \"enabled\": true,
-                            \"is_default\": false,
-                            \"context_limit\": 200000,
-                            \"model_config\": {
-                              \"max_output_tokens\": 64000,
-                              \"provider_options\": {
-                                \"anthropic\": {
-                                  \"send_reasoning\": true,
-                                  \"thinking\": {
-                                    \"budget_tokens\": 8192
-                                  }
-                                }
-                              }
-                            }
-                          }" || echo "  (may already exist)"
-
-
-                        echo "Adding model: OpenAI gpt-oss-120b (OpenAI-compat)..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/experimental/chats/model-configs" \
-                          -d "{
-                            \"ai_provider_id\": \"${OPENAI_PROVIDER_ID}\",
-                            \"model\": \"openai.gpt-oss-120b\",
-                            \"display_name\": \"OpenAI gpt-oss-120b\",
-                            \"enabled\": true,
-                            \"is_default\": false,
-                            \"context_limit\": 128000,
-                            \"model_config\": {
-                              \"max_output_tokens\": 8192
-                            }
-                          }" || echo "  (may already exist)"
-
-                        echo "Adding model: Devstral 2 (OpenAI-compat)..."
-                        curl -sf -X POST \
-                          -H "Coder-Session-Token: ${CODER_SESSION_TOKEN}" \
-                          -H "Content-Type: application/json" \
-                          "${CODER_URL}/api/experimental/chats/model-configs" \
-                          -d "{
-                            \"ai_provider_id\": \"${OPENAI_PROVIDER_ID}\",
-                            \"model\": \"mistral.devstral-2-123b\",
-                            \"display_name\": \"Devstral 2 123B\",
-                            \"enabled\": true,
-                            \"is_default\": false,
-                            \"context_limit\": 128000,
-                            \"model_config\": {
-                              \"max_output_tokens\": 8192
-                            }
-                          }" || echo "  (may already exist)"
-
-                        echo "Chat Model Configs configured successfully."
-                        echo "=== AI Provider Configuration Complete ==="
+                        ( cd "$CODER_GITOPS_ABS/ai-providers" && bash ai_providers_gitops.sh "$CODER_SESSION_TOKEN" )
+                        echo "=== AI Provider + Agents MCP Configuration Complete ==="
                       else
-                        CODER_SESSION_TOKEN=$(aws secretsmanager get-secret-value --secret-id partner-coder-session-token --query SecretString --output text)
+                        CODER_SESSION_TOKEN=$(aws secretsmanager get-secret-value --secret-id "$CoderSessionTokenSecretArn" --query SecretString --output text)
                         echo "Session token received successfully"
                         
                         echo "Logging in to Coder"
@@ -1351,7 +1279,7 @@ Resources:
                     echo "Setting SSM parameters..."
                     echo "SSM_CODER_URL: ${SSM_CODER_URL}"
                     aws configure set cli_follow_urlparam false
-                    aws ssm put-parameter --name "coder-cloudfront-url" --value "${SSM_CODER_URL}" --type "String" --overwrite
+                    aws ssm put-parameter --name "/eks/${EKSClusterName}/cloudfront-url" --value "${SSM_CODER_URL}" --type "String" --overwrite
                     aws ssm put-parameter --name "/eks/${EKSClusterName}/cluster-name" --value "${EKSClusterName}" --type "String" --overwrite
                     aws ssm put-parameter --name "/eks/${EKSClusterName}/region" --value "${AWSRegion}" --type "String" --overwrite
                   fi
@@ -1565,9 +1493,9 @@ Outputs:
     Description: ECR URI for Challenge workspace image
     Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EKSClusterName}/coder-workspace-challenge:latest'
 
-  BedrockMantleApiKeySecretArn:
-    Description: ARN of the Bedrock Mantle API key secret (ServiceCredentialSecret)
-    Value: !Ref BedrockMantleApiKeySecret
+  BedrockOpenAIApiKeySecretArn:
+    Description: ARN of the Amazon Bedrock API key secret (bedrock.amazonaws.com ServiceCredentialSecret) for the /openai/v1 provider
+    Value: !Ref BedrockOpenAIApiKeySecret
 
   BedrockApiKeyUserName:
     Description: IAM user that owns the Bedrock service-specific credential
