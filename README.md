@@ -3,7 +3,7 @@
 AI-powered development platform on AWS: [Coder](https://coder.com) on Amazon EKS, with
 **serverless Fargate workspaces** and **Coder Agents** backed by Amazon Bedrock.
 
-![Architecture Diagram](images/AWSCoderSingleRegionv2-0.png)
+![Architecture Diagram](images/AWSCoderSingleRegionv3-0.png)
 
 ## Overview
 
