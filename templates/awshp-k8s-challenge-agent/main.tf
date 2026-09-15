@@ -140,7 +140,7 @@ resource "coder_agent" "dev" {
 
 module "coder-login" {
     source   = "registry.coder.com/coder/coder-login/coder"
-    version  = "1.1.0"
+    version  = "1.1.1"
     agent_id = coder_agent.dev.id
 }
 
@@ -196,7 +196,7 @@ resource "coder_script" "agent_python_kernel" {
 
 module "code-server" {
     source   = "registry.coder.com/coder/code-server/coder"
-    version  = "1.3.1"
+    version  = "1.5.2"
     agent_id       = coder_agent.dev.id
     folder         = local.home_dir
     subdomain = false

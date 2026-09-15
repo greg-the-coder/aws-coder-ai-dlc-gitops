@@ -1,32 +1,35 @@
 ---
-display_name: Clash of Agents - Challenge Workspace
-description: Optimized for Coder Agents. Fargate workspace pre-loaded with Python agent frameworks (Strands, LangGraph, LangChain, LlamaIndex, Lyzr) and Amazon Bedrock access.
+display_name: AWS Workshop - AI Agent Development
+description: Build advanced AI agents and deploy them to AWS. Fargate workspace pre-loaded with agent frameworks (Strands, LangGraph, LangChain, LlamaIndex, Lyzr), AWS CDK/CLI, and Amazon Bedrock access.
 icon: ../../../site/static/icon/k8s.png
 maintainer_github: coder
 verified: true
-tags: [kubernetes, fargate, coder-agents, ai, agents, bedrock, python]
+tags: [kubernetes, fargate, ai, agents, agent-development, bedrock, python, coder-agents]
 optimized_for: coder-agents
 ---
 
-# Clash of Agents — Challenge Workspace
+# AI Agent Development on AWS
 
-> **Optimized for Coder Agents.** This is the recommended template for running
-> [Coder Agents](https://coder.com/docs). It ships with the Python agent frameworks and
-> Amazon Bedrock tooling that agents need pre-installed, so an agent can start building
-> immediately without setting up its environment.
+> **Optimized for Coder Agents.** This is also the recommended template for running
+> [Coder Agents](https://coder.com/docs): the agent frameworks and Amazon Bedrock
+> tooling are pre-installed, so an agent — or a human builder — can start building on
+> the first turn without setting up the environment.
 
-A serverless Coder workspace for the *Clash of Agents* workshop challenges. It runs on
-**AWS Fargate** with a persistent EFS-backed home directory, and comes with a curated set of
-agentic-AI libraries and AWS tooling baked into the image.
+A serverless Coder workspace for **building advanced AI agents and deploying them to AWS**.
+It runs on **AWS Fargate** with a persistent EFS-backed home directory and comes with a
+curated set of agentic-AI frameworks, AWS SDKs/tooling, and Amazon Bedrock access baked into
+the image — everything you need to go from prototype to a deployable agent.
 
-## Why this template for Coder Agents
+## Why this template
 
-- **Zero setup for agents** — the agent frameworks, AWS SDKs, and Bedrock integrations are
-  already installed system-wide, so a Coder Agent can run code on first turn.
+- **Batteries-included agent stack** — the major Python agent frameworks, AWS SDKs, and
+  Bedrock integrations are installed system-wide, so you can build and iterate immediately.
+- **Deploy to AWS** — AWS CLI v2 and AWS CDK are preinstalled to package and ship your
+  agents (e.g. to Lambda, ECS/Fargate, or Amazon Bedrock AgentCore) from the workspace.
 - **Bedrock-ready** — `boto3`, `langchain-aws`, and the LlamaIndex Bedrock integrations are
-  preconfigured to call Amazon Bedrock models.
-- **Lightweight, reproducible base** — minimal display apps (web terminal + code-server) keep
-  the workspace fast to provision; everything an agent needs is in the image.
+  preconfigured to call Amazon Bedrock models via the workspace IAM role.
+- **Multi-framework** — build with Strands, LangGraph/LangChain, LlamaIndex, or Lyzr, and
+  compare approaches in a single environment.
 - **Persistent workspace** — work survives restarts via an EFS `ReadWriteMany` home volume.
 
 ## Capabilities
@@ -72,4 +75,5 @@ Storage is provisioned automatically via EFS; there is no disk-size parameter.
 
 - Tools installed outside `/home/coder` are part of the container image; rebuild the image to
   add system packages. Files under `/home/coder` persist across restarts.
-- This template is intended as the single environment Coder Agents use for the workshop.
+- This template is intended as the primary environment for building AI agents in the workshop,
+  and is also the recommended workspace when running Coder Agents against this deployment.

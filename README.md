@@ -3,7 +3,7 @@
 AI-powered development platform on AWS: [Coder](https://coder.com) on Amazon EKS, with
 **serverless Fargate workspaces** and **Coder Agents** backed by Amazon Bedrock.
 
-![Architecture Diagram](images/AWSCoderSingleRegionv2-0.png)
+![Architecture Diagram](images/AWSCoderSingleRegionv3-0.png)
 
 ## Overview
 
@@ -13,8 +13,9 @@ CloudFormation stack. Two capabilities are the focus of this platform:
 - **Fargate workspaces** — developer workspaces run on AWS Fargate (serverless pods), with
   persistent home directories backed by Amazon EFS. No worker nodes to manage or scale for
   workspace compute.
-- **Coder Agents** — the built-in agentic coding assistant, wired to Amazon Bedrock (native)
-  and Bedrock Mantle (OpenAI-compatible) so agents run entirely on AWS-hosted models.
+- **Coder Agents** — the built-in agentic coding assistant (GA in Coder 2.37), wired to
+  Amazon Bedrock (native) and the Bedrock OpenAI-compatible endpoint (`/openai/v1`) so
+  agents run entirely on AWS-hosted models.
 
 See [Deployment](#deployment) to run it in your own AWS account.
 
@@ -112,21 +113,29 @@ Workspace templates create an EFS access point + PV/PVC per workspace and mount 
 
 ## Coder Agents
 
-Coder Agents are configured during deployment through the Coder API (no console clicks
-required). Two AI providers are provisioned:
+Coder Agents (GA in Coder 2.37) are configured during deployment via the `coderd` Terraform
+provider (no console clicks required). Two AI providers are provisioned:
 
-| Provider | Type | Endpoint | Models |
+| Provider (name) | Type | Endpoint | Models |
 |----------|------|----------|--------|
-| `aws-bedrock-partner` | Bedrock (native, SigV4) | `bedrock-runtime.us-east-1` | Claude Opus 4.8 (default), Claude Haiku 4.5 (small/fast) |
-| `openai-compat` | OpenAI-compatible (Bedrock Mantle) | `bedrock-mantle.us-east-1` | Mistral Large 3, Devstral 2 |
+| `bedrock` ("AWS Bedrock") | Bedrock (native, Pod Identity IAM) | `bedrock-runtime.us-east-1` | Claude Opus 4.6 (default), Claude Haiku 4.5 (small/fast) |
+| `openai-compat` ("OpenAI-compatible (AWS Bedrock)") | OpenAI-compatible (Bedrock native OpenAI endpoint) | `bedrock-runtime.us-east-1/openai/v1` | OpenAI GPT-5.6 Sol, xAI Grok 4.6 |
 
 Notes:
-- Anthropic models use global cross-region inference profile IDs and are served from
-  **us-east-1**, independent of the stack's deployment region.
-- The Bedrock Mantle (OpenAI-compatible) API key is generated automatically from an IAM
-  service-specific credential and stored in Secrets Manager.
-- Provider and model configuration is applied idempotently by the CodeBuild deployment
-  script via `/api/v2/ai/providers` and `/api/experimental/chats/model-configs`.
+- Anthropic, OpenAI, and xAI models use cross-region inference profile IDs (`global.`/`us.`)
+  and are served from **us-east-1**, independent of the stack's deployment region.
+- Native Bedrock credentials come from the `coderd` pod IAM role (EKS Pod Identity), so no
+  static access keys are stored for the `bedrock` provider.
+- The OpenAI-compatible provider authenticates with an **Amazon Bedrock API key** (a
+  `bedrock.amazonaws.com` IAM service-specific credential) generated automatically and
+  stored in Secrets Manager.
+- Provider and model configuration is applied declaratively by the
+  [`ai-providers/`](./ai-providers) Terraform (the `coderd` provider) during the CodeBuild
+  deploy step, replacing the earlier direct `/api/v2/ai/providers` and
+  `/api/experimental/chats/model-configs` API calls.
+- The **AWS Knowledge MCP server** (remote, streamable HTTP) is registered for Coder Agents
+  via `coderd_agents_mcp_server`, giving agents AWS docs, API references, and Well-Architected
+  guidance out of the box.
 
 ## Workspace Templates
 
@@ -136,18 +145,26 @@ provider (see [GitOps Workflow](#gitops-workflow)). Each template's `description
 
 | Template | Display Name | Best for |
 |----------|--------------|----------|
-| `awshp-k8s-challenge-agent` | Clash of Agents — Challenge Workspace | **Optimized for Coder Agents.** Pre-loaded Python agent frameworks (Strands, LangGraph, LangChain, LlamaIndex, Lyzr) + Bedrock. |
+| `awshp-k8s-challenge-agent` | AWS Workshop - AI Agent Development | Build & deploy AI agents to AWS. Pre-loaded agent frameworks (Strands, LangGraph, LangChain, LlamaIndex, Lyzr), AWS CDK/CLI + Bedrock. Optimized for Coder Agents. |
 | `awshp-k8s-base-claudecode` | AWS Workshop — Kubernetes with Claude Code | Claude Code AI assistant with task automation. |
+| `awshp-k8s-base-codex` | AWS Workshop — Kubernetes with OpenAI Codex | OpenAI Codex CLI (GPT-5.6 Sol via the Coder AI Gateway) for interactive development. |
 | `awshp-k8s-base-kirocli` | AWS Workshop — Kubernetes with Kiro CLI | Kiro CLI AI assistant for interactive development. |
 
 All templates run on Fargate with EFS-backed persistent home directories.
+
+The **Claude Code**, **Codex**, and **Kiro CLI** templates ship a citizen-builder set of
+[AWS Labs MCP servers](https://github.com/awslabs/mcp) preconfigured for their assistants
+— IaC (CloudFormation + CDK), pricing, Serverless, and CloudWatch — running on demand via
+`uvx`. General AWS API access is provided by the AWS CLI (v2) and boto3, which the agents
+drive directly from the shell.
 
 ## Prerequisites
 
 - AWS account with permissions to create EKS, VPC, Aurora, CloudFront, EFS, ECR, CodeBuild, IAM, Lambda, and Secrets Manager resources
 - AWS CLI configured
 - Sufficient quotas for EKS, Aurora PostgreSQL, CloudFront, and VPC resources (NAT Gateways, EIPs)
-- Amazon Bedrock model access enabled in **us-east-1** for the configured Claude and Mistral models
+- Amazon Bedrock model access enabled in **us-east-1** for the configured Claude (Anthropic), OpenAI, and xAI models
+- A **Coder Premium license** (supplied via the `CoderLicenseKey` parameter) is required for coderd HA (2 replicas) and the Coder Agents MCP-servers API
 - Deploy the [image pipeline stack](#step-1-build-workspace-images-codebuild_image_pipelineyaml) **before** the core stack (see [Deployment](#deployment))
 
 ## Deployment
@@ -170,7 +187,7 @@ used by the Fargate templates:
 
 | ECR repository | Built from | Used by template |
 |----------------|------------|------------------|
-| `<EKSClusterName>/coder-workspace-claude-code` | [`images/coder-workspace-claude-code/`](./images/coder-workspace-claude-code) | `awshp-k8s-base-claudecode` |
+| `<EKSClusterName>/coder-workspace-claude-code` | [`images/coder-workspace-claude-code/`](./images/coder-workspace-claude-code) | `awshp-k8s-base-claudecode`, `awshp-k8s-base-codex` |
 | `<EKSClusterName>/coder-workspace-kiro-cli` | [`images/coder-workspace-kiro-cli/`](./images/coder-workspace-kiro-cli) | `awshp-k8s-base-kirocli` |
 | `<EKSClusterName>/coder-workspace-challenge` | [`images/coder-workspace-challenge/`](./images/coder-workspace-challenge) | `awshp-k8s-challenge-agent` |
 
@@ -202,7 +219,8 @@ used by the Fargate templates:
    - `CoderAdminEmail`, `CoderAdminUser`, `CoderAdminPassword`, `CoderAdminName`
 3. Optional parameters (defaults shown):
    - `EKSClusterName` (`coder-aws-cluster`) — **use the same value as Step 1**,
-     `KubernetesVersion` (`1.35`), `CoderVersion` (`2.34.4`), `CoderPremiumTrial` (`false`),
+     `KubernetesVersion` (`1.35`), `CoderVersion` (`2.37.0`), `CoderLicenseKey` (empty —
+     supply a Coder Premium license to enable HA and the MCP-servers API),
      `CoderGitOpsTemplateRepoURL`, `RetryFlag` (`False`)
 4. Acknowledge IAM resource creation and create the stack (~30–45 minutes).
 
@@ -242,14 +260,15 @@ terraform apply -auto-approve
 
 ## Architecture Summary
 
+- **Coder** — v2.37.x control plane with **Coder Agents (GA)** and the AI Gateway; runs HA (2 coderd replicas, requires a Premium license)
 - **EKS** — Auto Mode (control plane + system workloads) with a dedicated **Fargate profile** for workspaces
 - **Aurora PostgreSQL Serverless v2** — Coder database (encrypted, KMS)
 - **CloudFront + Network Load Balancer** — secure global access to Coder
 - **VPC** — public/private/Fargate subnets across 2 AZs, NAT gateways for egress
 - **EFS** — persistent workspace home directories (Fargate-compatible)
 - **ECR** — three `coder-workspace-*` repositories holding the Fargate workspace images built by the [image pipeline stack](#step-1-build-workspace-images-codebuild_image_pipelineyaml)
-- **Secrets Manager** — admin password, session token, Bedrock Mantle API key
-- **IAM** — `coder-and-aws-workshop-user` workspace role (Bedrock, Bedrock Mantle, S3, Secrets Manager, EKS, EFS, etc.)
+- **Secrets Manager** — admin password, session token, Bedrock (OpenAI-compatible) API key
+- **IAM** — `<EKSClusterName>-workshop-user` workspace role (Bedrock, S3, Secrets Manager, EKS, EFS, etc.)
 
 ## Troubleshooting
 
@@ -259,7 +278,7 @@ terraform apply -auto-approve
 | Cannot reach `CoderURL` | CloudFront status is `Deployed`; NLB target health; `kubectl get pods -n coder` |
 | Workspace won't start | Fargate profile is `ACTIVE`; `kubectl get sc` shows `efs-static`; EFS mount targets healthy; `kubectl get pvc -n coder-ws` |
 | Workspace image pull error / `ImagePullBackOff` | Step 1 image pipeline ran successfully; each `<EKSClusterName>/coder-workspace-*` ECR repo has a `latest` image; `EKSClusterName` and Region match between both stacks |
-| Coder Agent model errors | Bedrock model access in us-east-1; provider config via `/api/v2/ai/providers`; Bedrock Mantle secret populated |
+| Coder Agent model errors | Bedrock model access in us-east-1; AI providers/models applied by the [`ai-providers/`](./ai-providers) Terraform; Bedrock (OpenAI-compat) API key secret populated |
 
 ## Cleanup
 
