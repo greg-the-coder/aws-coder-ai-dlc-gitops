@@ -18,8 +18,8 @@ persisted on **Amazon EFS** so work survives workspace restarts.
 ### AI assistant
 - **Claude Code** CLI (`@anthropic-ai/claude-code`) with **task automation** and task
   reporting back to Coder (`report_tasks = true`)
-- **Amazon Bedrock** integration — defaults to Claude Opus 4.8
-  (`global.anthropic.claude-opus-4-8`) via the workspace IAM role
+- **Amazon Bedrock** integration — defaults to Claude Opus 4.6
+  (`global.anthropic.claude-opus-4-6-v1`) via the workspace IAM role
 
 ### Developer environment
 - **code-server** (VS Code in the browser) and **Kiro IDE** web app
