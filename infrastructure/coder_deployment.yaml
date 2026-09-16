@@ -353,7 +353,7 @@ Resources:
     Type: AWS::IAM::User
     DependsOn: WorkshopCoderRole
     Properties:
-      UserName: !Sub 'coder-bedrock-api-key-user-${AWS::StackName}'
+      UserName: !Sub 'bak-${AWS::StackName}'
       Policies:
         - PolicyName: BedrockInvokeAccessPolicy
           PolicyDocument:
@@ -379,7 +379,7 @@ Resources:
       Description: !Sub >-
         Amazon Bedrock API key (bedrock.amazonaws.com ServiceCredentialSecret) for the Coder
         AI Gateway openai-compat provider (bedrock-runtime /openai/v1 endpoint).
-        IAM user: coder-bedrock-api-key-user-${AWS::StackName}.
+        IAM user: bak-${AWS::StackName}.
         Populated by CodeBuild post_build.
       SecretString: 'PENDING_CODEBUILD_POPULATION'
       Tags:
@@ -1187,7 +1187,7 @@ Resources:
                         BEDROCK_REGION="us-east-1"  # Anthropic inference profiles available in us-east-1
                         BEDROCK_ENDPOINT="https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com"
                         BEDROCK_OPENAI_ENDPOINT="https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com/openai/v1"
-                        BEDROCK_USER="coder-bedrock-api-key-user-${STACK_NAME}"
+                        BEDROCK_USER="bak-${STACK_NAME}"
 
                         EXISTING_SECRET=$(aws secretsmanager get-secret-value \
                           --secret-id "${BEDROCK_OPENAI_SECRET_ARN}" \
