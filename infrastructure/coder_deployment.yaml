@@ -1271,6 +1271,31 @@ Resources:
                         export BEDROCK_SMALL_FAST_MODEL="global.anthropic.claude-haiku-4-5-20251001-v1:0"
                         export BEDROCK_OPENAI_KEY
 
+                        # OpenAI GPT models on Bedrock are AWS Marketplace models and require a
+                        # one-time account-level agreement (subscription) before they can be
+                        # invoked - without it, invocation returns HTTP 403 ("...not authorized
+                        # to perform the required AWS Marketplace actions..."), even for an admin
+                        # identity. Anthropic/xAI models do not need this. Ensure the agreement
+                        # exists for each configured OpenAI model (idempotent; the CodeBuild
+                        # WorkshopCoderRole holds bedrock:* + aws-marketplace:*).
+                        BEDROCK_MARKETPLACE_MODELS="us.openai.gpt-5.6-sol"
+                        for MP_MODEL in $BEDROCK_MARKETPLACE_MODELS; do
+                          OFFER_TOKEN=$(aws bedrock list-foundation-model-agreement-offers \
+                            --model-id "$MP_MODEL" --region "$BEDROCK_REGION" \
+                            --query 'offers[0].offerToken' --output text 2>/dev/null || echo "")
+                          if [ -n "$OFFER_TOKEN" ] && [ "$OFFER_TOKEN" != "None" ]; then
+                            if aws bedrock create-foundation-model-agreement \
+                                 --model-id "$MP_MODEL" --offer-token "$OFFER_TOKEN" \
+                                 --region "$BEDROCK_REGION" >/dev/null 2>&1; then
+                              echo "Bedrock Marketplace agreement ensured for $MP_MODEL"
+                            else
+                              echo "Bedrock Marketplace agreement for $MP_MODEL already present or not required"
+                            fi
+                          else
+                            echo "No Marketplace offer found for $MP_MODEL; skipping (model may not require an agreement)."
+                          fi
+                        done
+
                         ( cd "$CODER_GITOPS_ABS/ai-providers" && bash ai_providers_gitops.sh "$CODER_SESSION_TOKEN" )
                         echo "=== AI Provider + Agents MCP Configuration Complete ==="
                       else
