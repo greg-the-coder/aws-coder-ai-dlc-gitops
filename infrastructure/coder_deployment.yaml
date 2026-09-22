@@ -365,6 +365,11 @@ Resources:
                   - bedrock:InvokeModelWithResponseStream
                   - bedrock:Converse
                   - bedrock:ConverseStream
+                  # Required for the Bedrock native OpenAI-compatible endpoint
+                  # (/openai/v1), which authenticates with the Bedrock API key
+                  # (bearer token) rather than SigV4. Without this the openai-compat
+                  # provider returns 401 access_denied on bedrock:CallWithBearerToken.
+                  - bedrock:CallWithBearerToken
                 Resource: '*'
       Tags:
         - Key: Purpose
