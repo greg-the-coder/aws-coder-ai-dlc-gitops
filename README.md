@@ -282,10 +282,33 @@ terraform apply -auto-approve
 
 ## Cleanup
 
-1. Delete all Coder workspaces from the UI.
-2. Delete the CloudFormation stack.
-3. Manually remove any retained resources (CloudFront distribution, logging S3 buckets, EKS
-   cluster, Aurora cluster, EFS file system) if they were not auto-deleted.
+Use the teardown script — it removes everything in dependency order, including the
+resources CloudFormation does **not** delete on its own: the eksctl-managed EKS
+cluster, the Coder control-plane NLB, the Bedrock IAM service-specific credential,
+SSM parameters, and the `Retain`-policy **Aurora** and **EFS** resources (which also
+block stack deletion because their networking is stack-owned). The core stack is
+deleted last.
+
+```bash
+# Dry run first to see exactly what will be deleted
+infrastructure/scripts/teardown.sh --stack <core-stack-name> --region <aws-region> --dry-run
+
+# Then run it for real (prompts for confirmation)
+infrastructure/scripts/teardown.sh --stack <core-stack-name> --region <aws-region>
+
+# Also delete the image-pipeline stack + its ECR images, and purge secrets immediately:
+infrastructure/scripts/teardown.sh --stack <core-stack-name> --region <aws-region> \
+  --image-stack <image-stack-name> --purge-secrets --yes
+```
+
+Requires `aws`, `eksctl`, `kubectl`, `helm`, and `jq`. The script discovers the cluster,
+Aurora, EFS, Bedrock IAM user, and secret ARNs from the stack's parameters/outputs, so
+you only supply the stack name and region. It is idempotent — safe to re-run if a step
+fails. The core-stack delete is slow (CloudFront disable+delete, ~20–40 min).
+
+> If the core stack fails to reach `DELETE_COMPLETE`, it is almost always a leftover ENI
+> or security group left behind by the NLB or EKS. Delete it in the console, then re-run
+> `aws cloudformation delete-stack --stack-name <core-stack-name>` (or re-run the script).
 
 ## Resources
 

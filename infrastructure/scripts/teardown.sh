@@ -1,0 +1,343 @@
+#!/usr/bin/env bash
+###############################################################################
+# teardown.sh - Comprehensive teardown for the AWS Coder AI-DLC workshop.
+#
+# Deletes, in dependency order, everything the workshop provisions:
+#
+#   1. Dynamically-created resources the CloudFormation stack does NOT own and
+#      that will NOT be removed by `cloudformation delete-stack`:
+#        * Coder workspaces (coder-ws namespace) + their EFS access points
+#        * The Coder control-plane NLB (created by the LoadBalancer Service)
+#        * The EKS cluster and all eksctl-managed CloudFormation stacks
+#          (control plane, add-ons, Fargate profile, OIDC provider, Auto Mode
+#          nodes, Pod Identity association)
+#        * The Bedrock IAM service-specific credential on the bak-<stack> user
+#          (blocks deletion of the CFN-managed IAM user if left in place)
+#        * SSM parameters under /eks/<cluster>/
+#
+#   2. Resources the core stack RETAINS on delete (DeletionPolicy: Retain) and
+#      whose stack-owned networking would otherwise BLOCK stack deletion:
+#        * EFS file system (+ access points + mount targets)
+#        * Aurora PostgreSQL cluster + instance
+#
+#   3. The CloudFormation stacks themselves:
+#        * the core Coder stack (VPC, CloudFront, NAT/EIP, KMS, IAM, secrets...)
+#        * optionally the image-pipeline stack (+ emptying its ECR repos)
+#
+# The core stack is deleted LAST, after the EKS cluster, NLB, Aurora and EFS
+# are gone, so the VPC / subnets / security groups / DB subnet group it owns can
+# be removed cleanly.
+#
+# Usage:
+#   ./teardown.sh --stack <core-stack-name> --region <aws-region> [options]
+#
+# Options:
+#   --stack NAME         Core Coder CloudFormation stack name            (required)
+#   --region REGION      AWS region (or set AWS_REGION / AWS_DEFAULT_REGION)
+#   --image-stack NAME   Also empty its ECR repos and delete this image stack
+#   --purge-secrets      Force-delete Secrets Manager secrets with no recovery window
+#   --yes                Skip the interactive confirmation prompt
+#   --dry-run            Show what would be deleted without deleting anything
+#   -h, --help           Show this help
+#
+# Requires: aws, eksctl, kubectl, helm, jq
+###############################################################################
+set -o pipefail
+
+# ----------------------------------------------------------------------------- helpers
+c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_blu=$'\033[36m'; c_off=$'\033[0m'
+log()   { printf '%s[teardown]%s %s\n'  "$c_blu" "$c_off" "$*"; }
+ok()    { printf '%s[ ok ]%s %s\n'      "$c_grn" "$c_off" "$*"; }
+warn()  { printf '%s[warn]%s %s\n'      "$c_yel" "$c_off" "$*" >&2; }
+err()   { printf '%s[fail]%s %s\n'      "$c_red" "$c_off" "$*" >&2; }
+phase() { printf '\n%s========== %s ==========%s\n' "$c_blu" "$*" "$c_off"; }
+
+DRY_RUN="false"
+# run: execute (or echo, in dry-run) a simple command whose args have no shell
+# metacharacters. For pipelines/loops, guard with: [ "$DRY_RUN" = true ] && ...
+run() {
+  if [ "$DRY_RUN" = "true" ]; then
+    printf '  %s[dry-run]%s %s\n' "$c_yel" "$c_off" "$*"
+  else
+    printf '  + %s\n' "$*"
+    "$@"
+  fi
+}
+
+require_cmd() {
+  local missing=0 c
+  for c in "$@"; do
+    command -v "$c" >/dev/null 2>&1 || { err "required command not found: $c"; missing=1; }
+  done
+  [ "$missing" -eq 0 ] || exit 1
+}
+
+# ----------------------------------------------------------------------------- args
+STACK_NAME=""; REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
+IMAGE_STACK=""; PURGE_SECRETS="false"; ASSUME_YES="false"
+usage() { sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --stack)        STACK_NAME="$2"; shift 2;;
+    --region)       REGION="$2"; shift 2;;
+    --image-stack)  IMAGE_STACK="$2"; shift 2;;
+    --purge-secrets) PURGE_SECRETS="true"; shift;;
+    --yes|-y)       ASSUME_YES="true"; shift;;
+    --dry-run)      DRY_RUN="true"; shift;;
+    -h|--help)      usage 0;;
+    *) err "unknown argument: $1"; usage 1;;
+  esac
+done
+
+[ -n "$STACK_NAME" ] || { err "--stack is required"; usage 1; }
+[ -n "$REGION" ]     || { err "--region is required (or set AWS_REGION)"; usage 1; }
+require_cmd aws jq eksctl kubectl helm
+export AWS_DEFAULT_REGION="$REGION" AWS_REGION="$REGION" AWS_PAGER=""
+
+# ----------------------------------------------------------------------------- discovery
+phase "Discovering resources from stack '$STACK_NAME' ($REGION)"
+
+if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+  warn "Core stack '$STACK_NAME' not found. It may already be deleted."
+  warn "Dynamic/retained resources (EKS, Aurora, EFS, ...) can still be cleaned if you"
+  warn "pass the correct --stack name used at deploy time. Aborting to avoid guessing."
+  exit 1
+fi
+
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+stack_json=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME")
+get_param()  { echo "$stack_json" | jq -r --arg k "$1" '.Stacks[0].Parameters[]? | select(.ParameterKey==$k) | .ParameterValue'; }
+get_output() { echo "$stack_json" | jq -r --arg k "$1" '.Stacks[0].Outputs[]?    | select(.OutputKey==$k)    | .OutputValue'; }
+
+CLUSTER_NAME=$(get_param  EKSClusterName)
+DB_NAME=$(get_param       DatabaseName)
+EFS_ID=$(get_output       EfsFileSystemId)
+BEDROCK_USER=$(get_output BedrockApiKeyUserName)
+CF_DIST_ID=$(get_output   CloudFrontDistributionId)
+ADMIN_SECRET_ARN=$(get_output   CoderAdminPasswordSecretArn)
+SESSION_SECRET_ARN=$(get_output CoderSessionTokenSecretArn)
+BEDROCK_SECRET_ARN=$(get_output BedrockOpenAIApiKeySecretArn)
+
+: "${CLUSTER_NAME:?could not read EKSClusterName parameter from stack}"
+AURORA_CLUSTER_ID="${CLUSTER_NAME}-aurora"
+AURORA_INSTANCE_ID="${CLUSTER_NAME}-aurora-instance"
+ECR_REPOS=(
+  "${CLUSTER_NAME}/coder-workspace-claude-code"
+  "${CLUSTER_NAME}/coder-workspace-kiro-cli"
+  "${CLUSTER_NAME}/coder-workspace-challenge"
+)
+
+cat <<SUMMARY
+
+  Account            : ${ACCOUNT_ID}
+  Region             : ${REGION}
+  Core stack         : ${STACK_NAME}
+  Image stack        : ${IMAGE_STACK:-<not selected>}
+  EKS cluster        : ${CLUSTER_NAME}
+  Aurora cluster     : ${AURORA_CLUSTER_ID} (instance ${AURORA_INSTANCE_ID})
+  EFS file system    : ${EFS_ID:-<none>}
+  Bedrock IAM user   : ${BEDROCK_USER:-<none>}
+  CloudFront dist    : ${CF_DIST_ID:-<none>}
+  Purge secrets      : ${PURGE_SECRETS}
+  Dry run            : ${DRY_RUN}
+
+SUMMARY
+
+if [ "$ASSUME_YES" != "true" ] && [ "$DRY_RUN" != "true" ]; then
+  printf '%sThis will PERMANENTLY DELETE the resources above, including the Aurora database and EFS data.%s\n' "$c_red" "$c_off"
+  read -r -p "Type the cluster name '${CLUSTER_NAME}' to confirm: " reply
+  [ "$reply" = "$CLUSTER_NAME" ] || { err "Confirmation did not match. Aborting."; exit 1; }
+fi
+
+CLUSTER_EXISTS="false"
+aws eks describe-cluster --name "$CLUSTER_NAME" >/dev/null 2>&1 && CLUSTER_EXISTS="true"
+
+# ============================================================================= 1. k8s apps + NLB
+phase "1/8  Kubernetes workloads (Coder workspaces, Helm release, control-plane NLB)"
+if [ "$CLUSTER_EXISTS" = "true" ]; then
+  if [ "$DRY_RUN" = "true" ]; then
+    log "[dry-run] would: update kubeconfig; delete coder-ws workloads; helm uninstall coder; delete namespaces coder/coder-ws; wait for NLB deletion"
+  else
+    aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$REGION" >/dev/null 2>&1 || warn "kubeconfig update failed"
+
+    # Delete workspaces first so their pods/PVCs (and per-workspace EFS access
+    # points via the CSI driver) are cleaned up before the cluster goes away.
+    kubectl delete deployments,statefulsets,pods,pvc --all -n coder-ws --ignore-not-found --timeout=180s 2>/dev/null || warn "coder-ws workload cleanup incomplete"
+
+    # Removing the Coder Helm release deletes the LoadBalancer Service, which
+    # tells the in-cluster controller to delete the AWS NLB. This MUST finish
+    # before we delete the cluster, or the NLB + its ENIs are orphaned and block
+    # VPC (stack) deletion.
+    helm uninstall coder -n coder --wait --timeout 5m 2>/dev/null || warn "helm uninstall coder skipped/failed (may already be gone)"
+
+    kubectl delete namespace coder-ws --ignore-not-found --timeout=180s 2>/dev/null || warn "namespace coder-ws delete incomplete"
+    kubectl delete namespace coder    --ignore-not-found --timeout=180s 2>/dev/null || warn "namespace coder delete incomplete"
+
+    # Poll until the Coder control-plane NLB is actually deleted.
+    log "Waiting for the Coder control-plane NLB to be removed..."
+    for i in $(seq 1 30); do
+      remaining=""
+      for arn in $(aws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerArn' --output text 2>/dev/null); do
+        [ -n "$arn" ] || continue
+        tags=$(aws elbv2 describe-tags --resource-arns "$arn" --query 'TagDescriptions[0].Tags' --output json 2>/dev/null)
+        if echo "$tags" | jq -e '.[]? | select(.Key=="kubernetes.io/service-name" and .Value=="coder/coder")' >/dev/null 2>&1 \
+           || echo "$tags" | jq -e '.[]? | select(.Key=="Name" and .Value=="coder-cntrlpln-nlb")' >/dev/null 2>&1; then
+          remaining="$remaining $arn"
+        fi
+      done
+      [ -z "$remaining" ] && { ok "Coder NLB removed."; break; }
+      if [ "$i" -eq 30 ]; then
+        warn "NLB still present after timeout; force-deleting:$remaining"
+        for arn in $remaining; do aws elbv2 delete-load-balancer --load-balancer-arn "$arn" 2>/dev/null || true; done
+        sleep 30
+      else
+        sleep 10
+      fi
+    done
+  fi
+else
+  log "EKS cluster '$CLUSTER_NAME' not found; skipping in-cluster cleanup."
+fi
+
+# ============================================================================= 2. EKS cluster
+phase "2/8  EKS cluster + eksctl stacks (add-ons, Fargate profile, OIDC, Auto Mode nodes)"
+if [ "$CLUSTER_EXISTS" = "true" ]; then
+  # eksctl removes the cluster control plane, add-ons, Fargate profiles, the
+  # OIDC provider, Pod Identity associations and all eksctl-created CloudFormation
+  # stacks. The VPC was pre-created by the core stack (referenced by id), so
+  # eksctl will NOT delete it.
+  run eksctl delete cluster --name "$CLUSTER_NAME" --region "$REGION" --disable-nodegroup-eviction --wait \
+    || warn "eksctl delete cluster reported errors; verify in the EKS/CloudFormation console."
+else
+  log "EKS cluster '$CLUSTER_NAME' not found; skipping."
+fi
+
+# ============================================================================= 3. Aurora (RETAINED)
+phase "3/8  Aurora PostgreSQL (retained by the stack; must go before stack delete)"
+if aws rds describe-db-instances --db-instance-identifier "$AURORA_INSTANCE_ID" >/dev/null 2>&1; then
+  run aws rds delete-db-instance --db-instance-identifier "$AURORA_INSTANCE_ID" --skip-final-snapshot --delete-automated-backups
+  [ "$DRY_RUN" = "true" ] || { log "Waiting for DB instance deletion..."; aws rds wait db-instance-deleted --db-instance-identifier "$AURORA_INSTANCE_ID" 2>/dev/null || true; }
+else
+  log "Aurora instance '$AURORA_INSTANCE_ID' not found; skipping."
+fi
+if aws rds describe-db-clusters --db-cluster-identifier "$AURORA_CLUSTER_ID" >/dev/null 2>&1; then
+  run aws rds delete-db-cluster --db-cluster-identifier "$AURORA_CLUSTER_ID" --skip-final-snapshot
+  [ "$DRY_RUN" = "true" ] || { log "Waiting for DB cluster deletion..."; aws rds wait db-cluster-deleted --db-cluster-identifier "$AURORA_CLUSTER_ID" 2>/dev/null || true; }
+  ok "Aurora deleted."
+else
+  log "Aurora cluster '$AURORA_CLUSTER_ID' not found; skipping."
+fi
+
+# ============================================================================= 4. EFS (RETAINED)
+phase "4/8  EFS file system (retained by the stack; access points + mount targets first)"
+if [ -n "$EFS_ID" ] && aws efs describe-file-systems --file-system-id "$EFS_ID" >/dev/null 2>&1; then
+  if [ "$DRY_RUN" = "true" ]; then
+    log "[dry-run] would delete access points + mount targets, then file system $EFS_ID"
+  else
+    for ap in $(aws efs describe-access-points --file-system-id "$EFS_ID" --query 'AccessPoints[].AccessPointId' --output text 2>/dev/null); do
+      [ -n "$ap" ] && { echo "  + delete access-point $ap"; aws efs delete-access-point --access-point-id "$ap" 2>/dev/null || true; }
+    done
+    for mt in $(aws efs describe-mount-targets --file-system-id "$EFS_ID" --query 'MountTargets[].MountTargetId' --output text 2>/dev/null); do
+      [ -n "$mt" ] && { echo "  + delete mount-target $mt"; aws efs delete-mount-target --mount-target-id "$mt" 2>/dev/null || true; }
+    done
+    log "Waiting for mount targets to clear..."
+    for i in $(seq 1 30); do
+      n=$(aws efs describe-mount-targets --file-system-id "$EFS_ID" --query 'length(MountTargets)' --output text 2>/dev/null || echo 0)
+      [ "$n" = "0" ] && break
+      sleep 10
+    done
+    aws efs delete-file-system --file-system-id "$EFS_ID" 2>/dev/null && ok "EFS file system deleted." || warn "EFS file system delete failed; retry after mount targets clear."
+  fi
+else
+  log "EFS file system '${EFS_ID:-<none>}' not found; skipping."
+fi
+
+# ============================================================================= 5. Bedrock IAM credential
+phase "5/8  Bedrock IAM service-specific credential (unblocks IAM user deletion)"
+if [ -n "$BEDROCK_USER" ] && aws iam get-user --user-name "$BEDROCK_USER" >/dev/null 2>&1; then
+  if [ "$DRY_RUN" = "true" ]; then
+    log "[dry-run] would delete service-specific credentials on $BEDROCK_USER"
+  else
+    for cid in $(aws iam list-service-specific-credentials --user-name "$BEDROCK_USER" --service-name bedrock.amazonaws.com --query 'ServiceSpecificCredentials[].ServiceSpecificCredentialId' --output text 2>/dev/null); do
+      [ -n "$cid" ] && { echo "  + delete service-specific-credential $cid"; aws iam delete-service-specific-credential --user-name "$BEDROCK_USER" --service-specific-credential-id "$cid" 2>/dev/null || true; }
+    done
+    ok "Bedrock credentials cleared."
+  fi
+else
+  log "Bedrock IAM user '${BEDROCK_USER:-<none>}' not found; skipping."
+fi
+
+# ============================================================================= 6. SSM parameters
+phase "6/8  SSM parameters (/eks/${CLUSTER_NAME}/*)"
+for p in "/eks/${CLUSTER_NAME}/cloudfront-url" "/eks/${CLUSTER_NAME}/cluster-name" "/eks/${CLUSTER_NAME}/region"; do
+  if aws ssm get-parameter --name "$p" >/dev/null 2>&1; then
+    run aws ssm delete-parameter --name "$p"
+  else
+    log "SSM parameter $p not found; skipping."
+  fi
+done
+
+# ============================================================================= 7. Optional: image stack + ECR
+phase "7/8  Image pipeline stack + ECR repositories (optional)"
+if [ -n "$IMAGE_STACK" ]; then
+  for repo in "${ECR_REPOS[@]}"; do
+    if aws ecr describe-repositories --repository-names "$repo" >/dev/null 2>&1; then
+      run aws ecr delete-repository --repository-name "$repo" --force
+    else
+      log "ECR repo $repo not found; skipping."
+    fi
+  done
+  if aws cloudformation describe-stacks --stack-name "$IMAGE_STACK" >/dev/null 2>&1; then
+    run aws cloudformation delete-stack --stack-name "$IMAGE_STACK"
+    [ "$DRY_RUN" = "true" ] || { log "Waiting for image stack deletion..."; aws cloudformation wait stack-delete-complete --stack-name "$IMAGE_STACK" 2>/dev/null || warn "image stack delete did not complete cleanly"; }
+  else
+    log "Image stack '$IMAGE_STACK' not found; skipping."
+  fi
+else
+  log "No --image-stack given; leaving ECR repositories and image pipeline stack in place."
+fi
+
+# ============================================================================= 8. Core stack
+phase "8/8  Core CloudFormation stack '$STACK_NAME' (VPC, CloudFront, NAT/EIP, KMS, IAM, secrets)"
+log "CloudFront disable+delete makes this step slow (typically 20-40 minutes)."
+run aws cloudformation delete-stack --stack-name "$STACK_NAME"
+if [ "$DRY_RUN" != "true" ]; then
+  log "Waiting for stack-delete-complete..."
+  if aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" 2>/dev/null; then
+    ok "Core stack deleted."
+  else
+    err "Core stack did not reach DELETE_COMPLETE. Check the CloudFormation console for the"
+    err "resource that blocked deletion (commonly a leftover ENI/security group from the NLB"
+    err "or EKS). Resolve it and re-run: aws cloudformation delete-stack --stack-name $STACK_NAME"
+  fi
+fi
+
+# ----------------------------------------------------------------------------- optional secret purge
+if [ "$PURGE_SECRETS" = "true" ]; then
+  phase "Post: purge Secrets Manager secrets (no recovery window)"
+  for arn in "$ADMIN_SECRET_ARN" "$SESSION_SECRET_ARN" "$BEDROCK_SECRET_ARN"; do
+    [ -n "$arn" ] && [ "$arn" != "None" ] || continue
+    run aws secretsmanager delete-secret --secret-id "$arn" --force-delete-without-recovery
+  done
+fi
+
+# ----------------------------------------------------------------------------- best-effort log groups
+phase "Post: CloudWatch log groups (best effort)"
+for lg in "/aws/codebuild/CodeBuild-${STACK_NAME}" "/aws/eks/${CLUSTER_NAME}/cluster"; do
+  if aws logs describe-log-groups --log-group-name-prefix "$lg" --query 'logGroups[0]' --output text 2>/dev/null | grep -q .; then
+    run aws logs delete-log-group --log-group-name "$lg"
+  fi
+done
+
+phase "Teardown complete"
+cat <<DONE
+Verify nothing lingers (a few resources may still be finalizing):
+  aws cloudformation describe-stacks --stack-name ${STACK_NAME} --region ${REGION}    # expect: does not exist
+  aws eks describe-cluster --name ${CLUSTER_NAME} --region ${REGION}                  # expect: ResourceNotFound
+  aws rds describe-db-clusters --db-cluster-identifier ${AURORA_CLUSTER_ID} --region ${REGION}
+  aws efs describe-file-systems --file-system-id ${EFS_ID:-<none>} --region ${REGION}
+  aws elbv2 describe-load-balancers --region ${REGION}    # no coder-cntrlpln-nlb
+
+If the core stack failed to delete, it is almost always a leftover ENI/security
+group left by the NLB or EKS. Delete it, then re-run delete-stack.
+DONE
