@@ -371,6 +371,17 @@ Resources:
                   # provider returns 401 access_denied on bedrock:CallWithBearerToken.
                   - bedrock:CallWithBearerToken
                 Resource: '*'
+              # Marketplace-subscribed models (e.g. the OpenAI GPT models) require the
+              # invoking identity to hold these actions; Bedrock returns 403 otherwise.
+              # NOTE: this only covers the IAM side — the account must ALSO have an
+              # active Bedrock Marketplace agreement for each such model (a one-time
+              # "Model access" subscription in the Bedrock console / create-foundation-
+              # model-agreement). See the deployment prerequisites.
+              - Effect: Allow
+                Action:
+                  - aws-marketplace:ViewSubscriptions
+                  - aws-marketplace:Subscribe
+                Resource: '*'
       Tags:
         - Key: Purpose
           Value: CoderAIGatewayBedrockOpenAIKey
