@@ -60,6 +60,27 @@ Benefits over the raw API calls:
 | OpenAI GPT-5.6 Sol (`us.openai.gpt-5.6-sol`) | openai-compat | |
 | xAI Grok 4.6 (`us.xai.grok-4.6`) | openai-compat | |
 
+### Adding another OpenAI (Marketplace) model
+
+OpenAI GPT models on Bedrock are **AWS Marketplace** models and need a one-time,
+account-level agreement (subscription) before they can be invoked — otherwise
+invocation fails with `HTTP 403` ("...not authorized to perform the required AWS
+Marketplace actions..."), even for an admin identity. Anthropic and xAI models do
+not need this.
+
+When you add a new OpenAI model, update **both** places so the agreement is created
+at deploy time:
+
+1. **`ai-providers/ai_providers.tf`** — add a `coderd_agents_model` resource on the
+   `openai_compat` provider (copy the `gpt_5_6_sol` block, change `model` +
+   `display_name`).
+2. **`infrastructure/coder_deployment.yaml`** — add the model id to the
+   `BEDROCK_MARKETPLACE_MODELS` list in the CodeBuild post-build step (it runs
+   `bedrock:CreateFoundationModelAgreement` for each id). Keep this list in sync with
+   the OpenAI `coderd_agents_model` resources above.
+
+xAI/Anthropic models only need step 1 (no `BEDROCK_MARKETPLACE_MODELS` entry).
+
 ## Usage (mirrors `templates/templates_gitops.sh`)
 
 Run from this directory with the Coder session token as the first argument:

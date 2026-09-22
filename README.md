@@ -171,7 +171,8 @@ drive directly from the shell.
     `bedrock:CreateFoundationModelAgreement` for the configured OpenAI models), and the workspace/
     API-key IAM identities are granted `aws-marketplace:ViewSubscriptions`/`Subscribe`. If you
     prefer, you can pre-enable it in the **Bedrock console → Model access**. Anthropic and xAI
-    models do not require a Marketplace agreement.
+    models do not require a Marketplace agreement. To add more OpenAI models later, see
+    [`ai-providers/README.md`](./ai-providers/README.md#adding-another-openai-marketplace-model).
 - A **Coder Premium license** (supplied via the `CoderLicenseKey` parameter) is required for coderd HA (2 replicas) and the Coder Agents MCP-servers API
 - Deploy the [image pipeline stack](#step-1-build-workspace-images-codebuild_image_pipelineyaml) **before** the core stack (see [Deployment](#deployment))
 
