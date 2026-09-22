@@ -64,6 +64,7 @@ Parameters:
     Type: String
     Description: Coder Premium Trial License Key
     Default: ""
+    NoEcho: true
 
   CoderGitOpsTemplateRepoURL:
     Type: String
