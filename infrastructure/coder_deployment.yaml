@@ -984,19 +984,23 @@ Resources:
                       kubectl apply -f storageclass.yaml
                       
                       kubectl create configmap aws-auth -n kube-system --from-literal=mapRoles="[{\"rolearn\":\"$PARTICIPANT_ROLE_ARN\",\"username\":\"workshop-user\",\"groups\":[\"system:masters\"]}]" --dry-run=client -o yaml | kubectl apply -f -
-                      kubectl create namespace coder
+                      kubectl create namespace coder --dry-run=client -o yaml | kubectl apply -f -
                       
-                      kubectl create namespace coder-ws
+                      kubectl create namespace coder-ws --dry-run=client -o yaml | kubectl apply -f -
                       
                       kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/coder-workspace-rbac.yaml"
                       kubectl apply -f "$CODER_GITOPS_DIR/infrastructure/k8s/efs-storageclass.yaml"
                       
-                      aws eks create-fargate-profile \
-                        --cluster-name ${EKSClusterName} \
-                        --fargate-profile-name coder-workspaces \
-                        --pod-execution-role-arn ${FargatePodExecutionRoleArn} \
-                        --subnets ${FargateSubnet1} ${FargateSubnet2} \
-                        --selectors namespace=coder-ws
+                      if aws eks describe-fargate-profile --cluster-name ${EKSClusterName} --fargate-profile-name coder-workspaces >/dev/null 2>&1; then
+                        echo "Fargate profile coder-workspaces already exists; skipping creation (idempotent re-run)."
+                      else
+                        aws eks create-fargate-profile \
+                          --cluster-name ${EKSClusterName} \
+                          --fargate-profile-name coder-workspaces \
+                          --pod-execution-role-arn ${FargatePodExecutionRoleArn} \
+                          --subnets ${FargateSubnet1} ${FargateSubnet2} \
+                          --selectors namespace=coder-ws
+                      fi
                       
                       echo "Waiting for Fargate profile to become ACTIVE..."
                       aws eks wait fargate-profile-active \
@@ -1007,7 +1011,7 @@ Resources:
                       PostgreSQLConnectionURL="postgresql://${Username}:${Password}@${PostgreSQLClusterAddress}:${PostgreSQLPort}/${DatabaseName}"
                       kubectl create secret generic coder-db-url -n coder --from-literal=url="$PostgreSQLConnectionURL" --dry-run=client -o yaml | kubectl apply -f -
                  
-                      helm install coder coder-v2/coder --namespace coder --values coder-core-values-v2.yaml --version "${CoderVersion}"
+                      helm upgrade --install coder coder-v2/coder --namespace coder --values coder-core-values-v2.yaml --version "${CoderVersion}"
                     fi
 
                     for i in {1..30}; do
@@ -1022,11 +1026,16 @@ Resources:
                     done
 
                     if [ "$RetryFlag" != "True" ]; then
-                      aws eks create-pod-identity-association \
-                      --cluster-name ${EKSClusterName} \
-                      --namespace coder \
-                      --service-account coder \
-                      --role-arn arn:aws:iam::$ACCOUNT_ID:role/${WorkshopRoleName}
+                      EXISTING_PIA=$(aws eks list-pod-identity-associations --cluster-name ${EKSClusterName} --namespace coder --service-account coder --query 'associations[0].associationId' --output text 2>/dev/null || echo "None")
+                      if [ "$EXISTING_PIA" != "None" ] && [ -n "$EXISTING_PIA" ]; then
+                        echo "Pod Identity association for coder/coder already exists ($EXISTING_PIA); skipping."
+                      else
+                        aws eks create-pod-identity-association \
+                        --cluster-name ${EKSClusterName} \
+                        --namespace coder \
+                        --service-account coder \
+                        --role-arn arn:aws:iam::$ACCOUNT_ID:role/${WorkshopRoleName}
+                      fi
 
                       echo "Configuring IRSA for Fargate workspace pods..."
                       
@@ -1152,7 +1161,17 @@ Resources:
                       CODER_AGENT_URL="$CODER_CLOUDFRONT_URL"; export CODER_AGENT_URL
                       cd $CODER_GITOPS_DIR/templates 
 
-                      if [ "$RetryFlag" != "True" ]; then
+                      # Determine whether Coder is already initialized (its first/admin user
+                      # exists). GET /api/v2/users/first returns 200 once the initial user has
+                      # been created, 404 otherwise. This makes the deploy self-healing: a
+                      # re-run reuses the existing admin + stored token instead of trying to
+                      # create the first user again (which fails once initialized) — independent
+                      # of whether the RetryFlag value actually reached this build.
+                      FIRST_USER_HTTP=$(curl -s -o /dev/null -w "%{http_code}" -m 15 "${CODER_CLOUDFRONT_URL}/api/v2/users/first" 2>/dev/null || echo "000")
+                      if [ "$FIRST_USER_HTTP" = "200" ]; then CODER_INITIALIZED="true"; else CODER_INITIALIZED="false"; fi
+                      echo "Coder initialized (first user exists): $CODER_INITIALIZED (HTTP $FIRST_USER_HTTP)"
+
+                      if [ "$RetryFlag" != "True" ] && [ "$CODER_INITIALIZED" != "true" ]; then
                         echo "Creating initial Coder Administrator User"
                         LOGIN_SUCCESS=false
                         for attempt in {1..10}; do
