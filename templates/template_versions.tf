@@ -75,7 +75,7 @@ provider "coderd" {
 resource "coderd_template" "awshp-k8s-with-claude-code" {
   name        = "awshp-k8s-base-claudecode"
   display_name = "AWS Workshop - Kubernetes with Claude Code"
-  description = "Fargate Claude Code workspace routed through the Coder AI Gateway (Claude Opus 4.6 on Bedrock) with AI Session logging, VS Code (browser + desktop), MCP servers, and AWS CLI/CDK."
+  description = "Fargate Claude Code via the Coder AI Gateway (Opus 4.6 on Bedrock), session-logged; code-server + VS Code Desktop, AWS CLI/CDK."
   icon = "/icon/k8s.png"
   versions = [{
     directory = "./awshp-k8s-with-claude-code"
