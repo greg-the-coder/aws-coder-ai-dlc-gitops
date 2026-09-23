@@ -17,7 +17,7 @@ A serverless Coder workspace running on **AWS Fargate** with the
 
 ### AI assistant
 - **Kiro CLI** (`kiro-cli`, `kiro-cli-chat`) for interactive, command-line AI development
-- **Kiro IDE** web app
+- **Kiro IDE** desktop app
 - **MCP** (Model Context Protocol) support — pre-seeded `~/.kiro/settings/mcp.json`
 - **Amazon Bedrock** access via the workspace IAM role
 
@@ -26,7 +26,6 @@ A serverless Coder workspace running on **AWS Fargate** with the
 - One-click **Kiro CLI** authentication app (`kiro-auth`)
 - Web terminal
 - Node.js 20 LTS, AWS CLI v2, AWS CDK
-- Nirmata CLI (`nctl`)
 
 ## Runtime & infrastructure
 - **Compute:** AWS Fargate (namespace `coder-ws`), no EC2 worker nodes
