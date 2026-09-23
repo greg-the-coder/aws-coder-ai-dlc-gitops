@@ -37,10 +37,6 @@ Gateway.
   IAM role (IRSA); Codex forwards the pod environment to the stdio MCP servers, so the
   `<cluster>-workshop-user` role/token are inherited automatically (no runtime credential
   injection needed).
-  > The managed remote `aws-mcp` server (arbitrary-API `call_aws` + general AWS docs) was
-  > removed from all templates because its remote endpoint intermittently failed the MCP
-  > handshake (`-32602`). General AWS API access is available via the **AWS CLI** (v2) and
-  > **boto3**, which the model drives directly from the shell.
 
 ### Codex configuration notes
 The template bakes a `config.toml` (via the module's `base_config_toml`) tuned for the
