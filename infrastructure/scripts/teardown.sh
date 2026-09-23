@@ -123,6 +123,26 @@ wait_rds() {
   done
 }
 
+# wait_stack_delete: poll a CloudFormation stack until it is gone, printing a
+# status line every 15s (the core-stack delete - CloudFront disable+delete - can
+# run 20-40 min; `aws cloudformation wait` blocks silently and trips CloudShell's
+# inactivity timeout). Returns 0 when deleted, 1 on DELETE_FAILED/timeout.
+wait_stack_delete() {
+  local stack="$1" max_min="${2:-60}" i=0 status
+  local max_iter=$(( max_min * 4 ))
+  while :; do
+    status=$(aws cloudformation describe-stacks --stack-name "$stack" --query 'Stacks[0].StackStatus' --output text 2>/dev/null) || status="GONE"
+    case "$status" in
+      GONE|""|DELETE_COMPLETE) return 0;;
+      DELETE_FAILED)           return 1;;
+    esac
+    i=$(( i + 1 ))
+    printf '  ... waiting on stack %s: status=%s (~%dm elapsed)\n' "$stack" "$status" "$(( i / 4 ))"
+    if [ "$i" -ge "$max_iter" ]; then warn "Stack '$stack' still '$status' after ~${max_min}m; check the console."; return 1; fi
+    sleep 15
+  done
+}
+
 # ----------------------------------------------------------------------------- args
 STACK_NAME=""; REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
 IMAGE_STACK=""; PURGE_SECRETS="false"; ASSUME_YES="false"
@@ -351,7 +371,7 @@ if [ -n "$IMAGE_STACK" ]; then
   done
   if aws cloudformation describe-stacks --stack-name "$IMAGE_STACK" >/dev/null 2>&1; then
     run aws cloudformation delete-stack --stack-name "$IMAGE_STACK"
-    [ "$DRY_RUN" = "true" ] || { log "Waiting for image stack deletion..."; aws cloudformation wait stack-delete-complete --stack-name "$IMAGE_STACK" 2>/dev/null || warn "image stack delete did not complete cleanly"; }
+    [ "$DRY_RUN" = "true" ] || { log "Waiting for image stack deletion (status printed every 15s)..."; wait_stack_delete "$IMAGE_STACK" || warn "image stack delete did not complete cleanly"; }
   else
     log "Image stack '$IMAGE_STACK' not found; skipping."
   fi
@@ -374,8 +394,8 @@ done
 log "CloudFront disable+delete makes this step slow (typically 20-40 minutes)."
 run aws cloudformation delete-stack --stack-name "$STACK_NAME"
 if [ "$DRY_RUN" != "true" ]; then
-  log "Waiting for stack-delete-complete..."
-  if aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" 2>/dev/null; then
+  log "Waiting for stack-delete-complete (status printed every 15s)..."
+  if wait_stack_delete "$STACK_NAME"; then
     ok "Core stack deleted."
   else
     err "Core stack did not reach DELETE_COMPLETE. Check the CloudFormation console for the"
