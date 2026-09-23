@@ -97,6 +97,32 @@ empty_bucket() {
   done
 }
 
+# wait_rds: poll an RDS instance/cluster until it is gone, printing a status
+# line every 15s. `aws rds wait ...` blocks SILENTLY for many minutes, which
+# trips AWS CloudShell's inactivity timeout; the periodic output keeps the
+# session alive. $1 = instance|cluster, $2 = identifier, $3 = optional max mins.
+wait_rds() {
+  local kind="$1" id="$2" max_min="${3:-45}" i=0 status
+  local max_iter=$(( max_min * 4 ))
+  while :; do
+    if [ "$kind" = "instance" ]; then
+      status=$(aws rds describe-db-instances --db-instance-identifier "$id" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null) || status=""
+    else
+      status=$(aws rds describe-db-clusters --db-cluster-identifier "$id" --query 'DBClusters[0].Status' --output text 2>/dev/null) || status=""
+    fi
+    case "$status" in
+      ""|None) ok "RDS $kind '$id' deleted."; return 0;;
+    esac
+    i=$(( i + 1 ))
+    printf '  ... waiting on RDS %s %s: status=%s (~%dm elapsed)\n' "$kind" "$id" "$status" "$(( i / 4 ))"
+    if [ "$i" -ge "$max_iter" ]; then
+      warn "RDS $kind '$id' still '$status' after ~${max_min}m; continuing (verify in the console)."
+      return 1
+    fi
+    sleep 15
+  done
+}
+
 # ----------------------------------------------------------------------------- args
 STACK_NAME=""; REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
 IMAGE_STACK=""; PURGE_SECRETS="false"; ASSUME_YES="false"
@@ -241,13 +267,13 @@ fi
 phase "3/8  Aurora PostgreSQL (retained by the stack; must go before stack delete)"
 if aws rds describe-db-instances --db-instance-identifier "$AURORA_INSTANCE_ID" >/dev/null 2>&1; then
   run aws rds delete-db-instance --db-instance-identifier "$AURORA_INSTANCE_ID" --skip-final-snapshot --delete-automated-backups
-  [ "$DRY_RUN" = "true" ] || { log "Waiting for DB instance deletion..."; aws rds wait db-instance-deleted --db-instance-identifier "$AURORA_INSTANCE_ID" 2>/dev/null || true; }
+  [ "$DRY_RUN" = "true" ] || { log "Waiting for DB instance deletion (status printed every 15s)..."; wait_rds instance "$AURORA_INSTANCE_ID"; }
 else
   log "Aurora instance '$AURORA_INSTANCE_ID' not found; skipping."
 fi
 if aws rds describe-db-clusters --db-cluster-identifier "$AURORA_CLUSTER_ID" >/dev/null 2>&1; then
   run aws rds delete-db-cluster --db-cluster-identifier "$AURORA_CLUSTER_ID" --skip-final-snapshot
-  [ "$DRY_RUN" = "true" ] || { log "Waiting for DB cluster deletion..."; aws rds wait db-cluster-deleted --db-cluster-identifier "$AURORA_CLUSTER_ID" 2>/dev/null || true; }
+  [ "$DRY_RUN" = "true" ] || { log "Waiting for DB cluster deletion (status printed every 15s)..."; wait_rds cluster "$AURORA_CLUSTER_ID"; }
   ok "Aurora deleted."
 else
   log "Aurora cluster '$AURORA_CLUSTER_ID' not found; skipping."
