@@ -152,10 +152,52 @@ data "coder_parameter" "memory" {
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
 
-resource "coder_env" "bedrock_use" {
+# Route BOTH Claude Code and the notebook / agent-framework SDK LLM calls through
+# the **Coder AI Gateway** so every model request is centrally governed and
+# observable by the **Coder AI Governance Add-On** (spend, prompts, and tool calls
+# surface in Coder AI Session logs). We set the standard SDK env vars agent-wide
+# with the workspace owner's Coder session token, giving a single credential that
+# Claude Code, the anthropic / langchain-anthropic SDKs, and the OpenAI SDKs all
+# honor. The gateway forwards to the admin-configured Amazon Bedrock provider
+# (see ai-providers/) using the control plane's centrally-held credentials.
+#
+# We deliberately do NOT set CLAUDE_CODE_USE_BEDROCK: that makes Claude Code call
+# Bedrock directly over SigV4 (workspace IAM role), which bypasses the gateway and
+# produces NO AI Session logs. Routing via ANTHROPIC_BASE_URL below is what enables
+# session logging.
+#
+# IMPORTANT: the AI Gateway routes by PROVIDER NAME, not API type. The path segment
+# `bedrock` / `openai-compat` is the coderd_ai_provider *name* from
+# ai-providers/ai_providers.tf (routes are /api/v2/ai-gateway/<provider-name>/).
+# Anthropic-format requests go to the bedrock provider; OpenAI-format to openai-compat.
+#
+# NOTE: requires Coder v2.32+ with the Coder AI Governance Add-On enabled.
+# LIMITATION: the gateway exposes only OpenAI- and Anthropic-compatible endpoints
+# (no Bedrock SigV4), so boto3 bedrock-runtime / langchain-aws ChatBedrock still
+# call Bedrock directly via the workspace IAM role; use the Anthropic/OpenAI
+# clients to route through the gateway.
+resource "coder_env" "anthropic_base_url" {
   agent_id = coder_agent.dev.id
-  name     = "CLAUDE_CODE_USE_BEDROCK"
-  value    = "1"
+  name     = "ANTHROPIC_BASE_URL"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/bedrock"
+}
+
+resource "coder_env" "anthropic_api_key" {
+  agent_id = coder_agent.dev.id
+  name     = "ANTHROPIC_API_KEY"
+  value    = data.coder_workspace_owner.me.session_token
+}
+
+resource "coder_env" "openai_base_url" {
+  agent_id = coder_agent.dev.id
+  name     = "OPENAI_BASE_URL"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/openai-compat/v1"
+}
+
+resource "coder_env" "openai_api_key" {
+  agent_id = coder_agent.dev.id
+  name     = "OPENAI_API_KEY"
+  value    = data.coder_workspace_owner.me.session_token
 }
 
 resource "coder_env" "path" {
