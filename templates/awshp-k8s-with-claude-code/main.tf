@@ -85,7 +85,7 @@ variable "llamacloud_index" {
 locals {
   home_dir = "/home/coder"
   bin_path = "/home/coder/.local/bin:/home/coder/bin:/home/coder/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-  cost     = 2
+  cost     = 0 # keep daily_cost at 0 so workspaces don't consume quota on initial deployment
 
   # MCP servers added to Claude Code at user scope: Fiddler GenAI (observability)
   # + LangSmith (LangChain) as remote HTTP, LlamaCloud (LlamaIndex) over stdio via

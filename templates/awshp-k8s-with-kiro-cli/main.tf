@@ -145,7 +145,7 @@ data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
 
 locals {
-    cost = 2
+    cost = 0 # keep daily_cost at 0 so workspaces don't consume quota on initial deployment
     home_folder = "/home/coder"
 }
 

@@ -39,7 +39,7 @@ variable "efs_file_system_id" {
 
 locals {
   home_dir = "/home/coder"
-  cost     = 2
+  cost     = 0 # keep daily_cost at 0 so workspaces don't consume quota on initial deployment
 
   # Deployment region for AWS API calls the MCP servers make via the workspace
   # IAM role. Derived from the ECR registry region embedded in workspace_image
