@@ -430,6 +430,9 @@ resource "coder_app" "claude_code" {
   display_name = "Claude Code"
   icon         = "/icon/claude.svg"
   order        = 2
+  # This workshop deployment does not use wildcard app subdomains; serve the app
+  # on a path, not a subdomain (matches code-server's subdomain = false).
+  subdomain    = false
   open_in      = "slim-window"
   command      = <<-EOT
     cd "$HOME"
