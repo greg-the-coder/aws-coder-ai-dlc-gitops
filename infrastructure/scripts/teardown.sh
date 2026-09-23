@@ -11,9 +11,12 @@
 #        * The EKS cluster and all eksctl-managed CloudFormation stacks
 #          (control plane, add-ons, Fargate profile, OIDC provider, Auto Mode
 #          nodes, Pod Identity association)
-#        * The Bedrock IAM service-specific credential on the bak-<stack> user
-#          (blocks deletion of the CFN-managed IAM user if left in place)
+#        * The Bedrock IAM user's inline/managed policies, access keys, and
+#          service-specific credentials (bak-<stack>) - any of these left in
+#          place blocks CloudFormation from deleting the CFN-managed IAM user
 #        * SSM parameters under /eks/<cluster>/
+#        * Objects in the stack's S3 buckets (CloudFront/NLB access logs) - CFN
+#          cannot delete a non-empty bucket, so they are emptied before delete
 #
 #   2. Resources the core stack RETAINS on delete (DeletionPolicy: Retain) and
 #      whose stack-owned networking would otherwise BLOCK stack deletion:
@@ -70,6 +73,28 @@ require_cmd() {
     command -v "$c" >/dev/null 2>&1 || { err "required command not found: $c"; missing=1; }
   done
   [ "$missing" -eq 0 ] || exit 1
+}
+
+# empty_bucket: remove all objects, versions, and delete markers from an S3 bucket
+# so CloudFormation can delete it (CFN cannot delete a non-empty bucket - e.g. the
+# CloudFront / NLB access-log buckets accumulate objects over the workshop's life).
+empty_bucket() {
+  local b="$1"
+  aws s3api head-bucket --bucket "$b" >/dev/null 2>&1 || { log "bucket $b not found; skipping."; return 0; }
+  if [ "$DRY_RUN" = "true" ]; then printf '  %s[dry-run]%s empty s3://%s\n' "$c_yel" "$c_off" "$b"; return 0; fi
+  echo "  emptying s3://$b"
+  aws s3 rm "s3://$b" --recursive >/dev/null 2>&1 || true
+  # Remove any remaining object versions + delete markers (versioned buckets).
+  while :; do
+    local batch n
+    batch=$(aws s3api list-object-versions --bucket "$b" --max-items 500 \
+      --query '{Objects: [Versions[].{Key:Key,VersionId:VersionId}, DeleteMarkers[].{Key:Key,VersionId:VersionId}][]}' \
+      --output json 2>/dev/null || echo '{"Objects":[]}')
+    n=$(printf '%s' "$batch" | jq '.Objects | length' 2>/dev/null || echo 0)
+    [ "${n:-0}" -eq 0 ] && break
+    printf '%s' "$batch" | jq '{Objects: .Objects, Quiet: true}' > /tmp/td-empty.json
+    aws s3api delete-objects --bucket "$b" --delete file:///tmp/td-empty.json >/dev/null 2>&1 || break
+  done
 }
 
 # ----------------------------------------------------------------------------- args
@@ -252,16 +277,27 @@ else
   log "EFS file system '${EFS_ID:-<none>}' not found; skipping."
 fi
 
-# ============================================================================= 5. Bedrock IAM credential
-phase "5/8  Bedrock IAM service-specific credential (unblocks IAM user deletion)"
+# ============================================================================= 5. Bedrock IAM user cleanup
+phase "5/8  Bedrock IAM user policies + credentials (unblocks IAM user deletion)"
 if [ -n "$BEDROCK_USER" ] && aws iam get-user --user-name "$BEDROCK_USER" >/dev/null 2>&1; then
   if [ "$DRY_RUN" = "true" ]; then
-    log "[dry-run] would delete service-specific credentials on $BEDROCK_USER"
+    log "[dry-run] would remove all inline/managed policies, access keys and service-specific credentials from $BEDROCK_USER"
   else
-    for cid in $(aws iam list-service-specific-credentials --user-name "$BEDROCK_USER" --service-name bedrock.amazonaws.com --query 'ServiceSpecificCredentials[].ServiceSpecificCredentialId' --output text 2>/dev/null); do
-      [ -n "$cid" ] && { echo "  + delete service-specific-credential $cid"; aws iam delete-service-specific-credential --user-name "$BEDROCK_USER" --service-specific-credential-id "$cid" 2>/dev/null || true; }
+    # Inline policies (incl. any added out-of-band, e.g. BedrockBearerTokenAccess)
+    # block CloudFormation from deleting the user ("must delete policies first").
+    for pol in $(aws iam list-user-policies --user-name "$BEDROCK_USER" --query 'PolicyNames[]' --output text 2>/dev/null); do
+      [ -n "$pol" ] && { echo "  + delete-user-policy $pol"; aws iam delete-user-policy --user-name "$BEDROCK_USER" --policy-name "$pol" 2>/dev/null || true; }
     done
-    ok "Bedrock credentials cleared."
+    for arn in $(aws iam list-attached-user-policies --user-name "$BEDROCK_USER" --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null); do
+      [ -n "$arn" ] && { echo "  + detach-user-policy $arn"; aws iam detach-user-policy --user-name "$BEDROCK_USER" --policy-arn "$arn" 2>/dev/null || true; }
+    done
+    for ak in $(aws iam list-access-keys --user-name "$BEDROCK_USER" --query 'AccessKeyMetadata[].AccessKeyId' --output text 2>/dev/null); do
+      [ -n "$ak" ] && { echo "  + delete-access-key $ak"; aws iam delete-access-key --user-name "$BEDROCK_USER" --access-key-id "$ak" 2>/dev/null || true; }
+    done
+    for cid in $(aws iam list-service-specific-credentials --user-name "$BEDROCK_USER" --query 'ServiceSpecificCredentials[].ServiceSpecificCredentialId' --output text 2>/dev/null); do
+      [ -n "$cid" ] && { echo "  + delete-service-specific-credential $cid"; aws iam delete-service-specific-credential --user-name "$BEDROCK_USER" --service-specific-credential-id "$cid" 2>/dev/null || true; }
+    done
+    ok "Bedrock IAM user policies + credentials cleared (CloudFormation can now delete the user)."
   fi
 else
   log "Bedrock IAM user '${BEDROCK_USER:-<none>}' not found; skipping."
@@ -299,6 +335,16 @@ fi
 
 # ============================================================================= 8. Core stack
 phase "8/8  Core CloudFormation stack '$STACK_NAME' (VPC, CloudFront, NAT/EIP, KMS, IAM, secrets)"
+
+# Empty the stack's S3 buckets first (e.g. the CloudFront and NLB access-log
+# buckets) - CloudFormation cannot delete a non-empty bucket, which otherwise
+# fails the stack delete with "The bucket you tried to delete is not empty".
+log "Emptying the stack's S3 buckets..."
+for b in $(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
+    --query "StackResources[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" --output text 2>/dev/null); do
+  [ -n "$b" ] && [ "$b" != "None" ] && empty_bucket "$b"
+done
+
 log "CloudFront disable+delete makes this step slow (typically 20-40 minutes)."
 run aws cloudformation delete-stack --stack-name "$STACK_NAME"
 if [ "$DRY_RUN" != "true" ]; then
