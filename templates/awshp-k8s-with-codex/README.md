@@ -77,7 +77,8 @@ llm = ChatOpenAI(model="us.openai.gpt-5.6-sol")   # or "us.xai.grok-4.6"
 > via the workspace IAM role. Use the OpenAI clients above to route through the gateway.
 
 ### Developer environment
-- **code-server** (VS Code in the browser)
+- **VS Code Web** (official VS Code Server in the browser) and **VS Code Desktop**
+  (opens the workspace in your local VS Code via the Coder Remote extension)
 - Web terminal
 - Node.js 20 LTS, AWS CLI v2, AWS CDK
 - Python 3
