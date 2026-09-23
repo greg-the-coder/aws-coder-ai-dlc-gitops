@@ -11,9 +11,12 @@
 #        * The EKS cluster and all eksctl-managed CloudFormation stacks
 #          (control plane, add-ons, Fargate profile, OIDC provider, Auto Mode
 #          nodes, Pod Identity association)
-#        * The Bedrock IAM service-specific credential on the bak-<stack> user
-#          (blocks deletion of the CFN-managed IAM user if left in place)
+#        * The Bedrock IAM user's inline/managed policies, access keys, and
+#          service-specific credentials (bak-<stack>) - any of these left in
+#          place blocks CloudFormation from deleting the CFN-managed IAM user
 #        * SSM parameters under /eks/<cluster>/
+#        * Objects in the stack's S3 buckets (CloudFront/NLB access logs) - CFN
+#          cannot delete a non-empty bucket, so they are emptied before delete
 #
 #   2. Resources the core stack RETAINS on delete (DeletionPolicy: Retain) and
 #      whose stack-owned networking would otherwise BLOCK stack deletion:
@@ -70,6 +73,74 @@ require_cmd() {
     command -v "$c" >/dev/null 2>&1 || { err "required command not found: $c"; missing=1; }
   done
   [ "$missing" -eq 0 ] || exit 1
+}
+
+# empty_bucket: remove all objects, versions, and delete markers from an S3 bucket
+# so CloudFormation can delete it (CFN cannot delete a non-empty bucket - e.g. the
+# CloudFront / NLB access-log buckets accumulate objects over the workshop's life).
+empty_bucket() {
+  local b="$1"
+  aws s3api head-bucket --bucket "$b" >/dev/null 2>&1 || { log "bucket $b not found; skipping."; return 0; }
+  if [ "$DRY_RUN" = "true" ]; then printf '  %s[dry-run]%s empty s3://%s\n' "$c_yel" "$c_off" "$b"; return 0; fi
+  echo "  emptying s3://$b"
+  aws s3 rm "s3://$b" --recursive >/dev/null 2>&1 || true
+  # Remove any remaining object versions + delete markers (versioned buckets).
+  while :; do
+    local batch n
+    batch=$(aws s3api list-object-versions --bucket "$b" --max-items 500 \
+      --query '{Objects: [Versions[].{Key:Key,VersionId:VersionId}, DeleteMarkers[].{Key:Key,VersionId:VersionId}][]}' \
+      --output json 2>/dev/null || echo '{"Objects":[]}')
+    n=$(printf '%s' "$batch" | jq '.Objects | length' 2>/dev/null || echo 0)
+    [ "${n:-0}" -eq 0 ] && break
+    printf '%s' "$batch" | jq '{Objects: .Objects, Quiet: true}' > /tmp/td-empty.json
+    aws s3api delete-objects --bucket "$b" --delete file:///tmp/td-empty.json >/dev/null 2>&1 || break
+  done
+}
+
+# wait_rds: poll an RDS instance/cluster until it is gone, printing a status
+# line every 15s. `aws rds wait ...` blocks SILENTLY for many minutes, which
+# trips AWS CloudShell's inactivity timeout; the periodic output keeps the
+# session alive. $1 = instance|cluster, $2 = identifier, $3 = optional max mins.
+wait_rds() {
+  local kind="$1" id="$2" max_min="${3:-45}" i=0 status
+  local max_iter=$(( max_min * 4 ))
+  while :; do
+    if [ "$kind" = "instance" ]; then
+      status=$(aws rds describe-db-instances --db-instance-identifier "$id" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null) || status=""
+    else
+      status=$(aws rds describe-db-clusters --db-cluster-identifier "$id" --query 'DBClusters[0].Status' --output text 2>/dev/null) || status=""
+    fi
+    case "$status" in
+      ""|None) ok "RDS $kind '$id' deleted."; return 0;;
+    esac
+    i=$(( i + 1 ))
+    printf '  ... waiting on RDS %s %s: status=%s (~%dm elapsed)\n' "$kind" "$id" "$status" "$(( i / 4 ))"
+    if [ "$i" -ge "$max_iter" ]; then
+      warn "RDS $kind '$id' still '$status' after ~${max_min}m; continuing (verify in the console)."
+      return 1
+    fi
+    sleep 15
+  done
+}
+
+# wait_stack_delete: poll a CloudFormation stack until it is gone, printing a
+# status line every 15s (the core-stack delete - CloudFront disable+delete - can
+# run 20-40 min; `aws cloudformation wait` blocks silently and trips CloudShell's
+# inactivity timeout). Returns 0 when deleted, 1 on DELETE_FAILED/timeout.
+wait_stack_delete() {
+  local stack="$1" max_min="${2:-60}" i=0 status
+  local max_iter=$(( max_min * 4 ))
+  while :; do
+    status=$(aws cloudformation describe-stacks --stack-name "$stack" --query 'Stacks[0].StackStatus' --output text 2>/dev/null) || status="GONE"
+    case "$status" in
+      GONE|""|DELETE_COMPLETE) return 0;;
+      DELETE_FAILED)           return 1;;
+    esac
+    i=$(( i + 1 ))
+    printf '  ... waiting on stack %s: status=%s (~%dm elapsed)\n' "$stack" "$status" "$(( i / 4 ))"
+    if [ "$i" -ge "$max_iter" ]; then warn "Stack '$stack' still '$status' after ~${max_min}m; check the console."; return 1; fi
+    sleep 15
+  done
 }
 
 # ----------------------------------------------------------------------------- args
@@ -216,13 +287,13 @@ fi
 phase "3/8  Aurora PostgreSQL (retained by the stack; must go before stack delete)"
 if aws rds describe-db-instances --db-instance-identifier "$AURORA_INSTANCE_ID" >/dev/null 2>&1; then
   run aws rds delete-db-instance --db-instance-identifier "$AURORA_INSTANCE_ID" --skip-final-snapshot --delete-automated-backups
-  [ "$DRY_RUN" = "true" ] || { log "Waiting for DB instance deletion..."; aws rds wait db-instance-deleted --db-instance-identifier "$AURORA_INSTANCE_ID" 2>/dev/null || true; }
+  [ "$DRY_RUN" = "true" ] || { log "Waiting for DB instance deletion (status printed every 15s)..."; wait_rds instance "$AURORA_INSTANCE_ID"; }
 else
   log "Aurora instance '$AURORA_INSTANCE_ID' not found; skipping."
 fi
 if aws rds describe-db-clusters --db-cluster-identifier "$AURORA_CLUSTER_ID" >/dev/null 2>&1; then
   run aws rds delete-db-cluster --db-cluster-identifier "$AURORA_CLUSTER_ID" --skip-final-snapshot
-  [ "$DRY_RUN" = "true" ] || { log "Waiting for DB cluster deletion..."; aws rds wait db-cluster-deleted --db-cluster-identifier "$AURORA_CLUSTER_ID" 2>/dev/null || true; }
+  [ "$DRY_RUN" = "true" ] || { log "Waiting for DB cluster deletion (status printed every 15s)..."; wait_rds cluster "$AURORA_CLUSTER_ID"; }
   ok "Aurora deleted."
 else
   log "Aurora cluster '$AURORA_CLUSTER_ID' not found; skipping."
@@ -252,16 +323,27 @@ else
   log "EFS file system '${EFS_ID:-<none>}' not found; skipping."
 fi
 
-# ============================================================================= 5. Bedrock IAM credential
-phase "5/8  Bedrock IAM service-specific credential (unblocks IAM user deletion)"
+# ============================================================================= 5. Bedrock IAM user cleanup
+phase "5/8  Bedrock IAM user policies + credentials (unblocks IAM user deletion)"
 if [ -n "$BEDROCK_USER" ] && aws iam get-user --user-name "$BEDROCK_USER" >/dev/null 2>&1; then
   if [ "$DRY_RUN" = "true" ]; then
-    log "[dry-run] would delete service-specific credentials on $BEDROCK_USER"
+    log "[dry-run] would remove all inline/managed policies, access keys and service-specific credentials from $BEDROCK_USER"
   else
-    for cid in $(aws iam list-service-specific-credentials --user-name "$BEDROCK_USER" --service-name bedrock.amazonaws.com --query 'ServiceSpecificCredentials[].ServiceSpecificCredentialId' --output text 2>/dev/null); do
-      [ -n "$cid" ] && { echo "  + delete service-specific-credential $cid"; aws iam delete-service-specific-credential --user-name "$BEDROCK_USER" --service-specific-credential-id "$cid" 2>/dev/null || true; }
+    # Inline policies (incl. any added out-of-band, e.g. BedrockBearerTokenAccess)
+    # block CloudFormation from deleting the user ("must delete policies first").
+    for pol in $(aws iam list-user-policies --user-name "$BEDROCK_USER" --query 'PolicyNames[]' --output text 2>/dev/null); do
+      [ -n "$pol" ] && { echo "  + delete-user-policy $pol"; aws iam delete-user-policy --user-name "$BEDROCK_USER" --policy-name "$pol" 2>/dev/null || true; }
     done
-    ok "Bedrock credentials cleared."
+    for arn in $(aws iam list-attached-user-policies --user-name "$BEDROCK_USER" --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null); do
+      [ -n "$arn" ] && { echo "  + detach-user-policy $arn"; aws iam detach-user-policy --user-name "$BEDROCK_USER" --policy-arn "$arn" 2>/dev/null || true; }
+    done
+    for ak in $(aws iam list-access-keys --user-name "$BEDROCK_USER" --query 'AccessKeyMetadata[].AccessKeyId' --output text 2>/dev/null); do
+      [ -n "$ak" ] && { echo "  + delete-access-key $ak"; aws iam delete-access-key --user-name "$BEDROCK_USER" --access-key-id "$ak" 2>/dev/null || true; }
+    done
+    for cid in $(aws iam list-service-specific-credentials --user-name "$BEDROCK_USER" --query 'ServiceSpecificCredentials[].ServiceSpecificCredentialId' --output text 2>/dev/null); do
+      [ -n "$cid" ] && { echo "  + delete-service-specific-credential $cid"; aws iam delete-service-specific-credential --user-name "$BEDROCK_USER" --service-specific-credential-id "$cid" 2>/dev/null || true; }
+    done
+    ok "Bedrock IAM user policies + credentials cleared (CloudFormation can now delete the user)."
   fi
 else
   log "Bedrock IAM user '${BEDROCK_USER:-<none>}' not found; skipping."
@@ -289,7 +371,7 @@ if [ -n "$IMAGE_STACK" ]; then
   done
   if aws cloudformation describe-stacks --stack-name "$IMAGE_STACK" >/dev/null 2>&1; then
     run aws cloudformation delete-stack --stack-name "$IMAGE_STACK"
-    [ "$DRY_RUN" = "true" ] || { log "Waiting for image stack deletion..."; aws cloudformation wait stack-delete-complete --stack-name "$IMAGE_STACK" 2>/dev/null || warn "image stack delete did not complete cleanly"; }
+    [ "$DRY_RUN" = "true" ] || { log "Waiting for image stack deletion (status printed every 15s)..."; wait_stack_delete "$IMAGE_STACK" || warn "image stack delete did not complete cleanly"; }
   else
     log "Image stack '$IMAGE_STACK' not found; skipping."
   fi
@@ -299,11 +381,21 @@ fi
 
 # ============================================================================= 8. Core stack
 phase "8/8  Core CloudFormation stack '$STACK_NAME' (VPC, CloudFront, NAT/EIP, KMS, IAM, secrets)"
+
+# Empty the stack's S3 buckets first (e.g. the CloudFront and NLB access-log
+# buckets) - CloudFormation cannot delete a non-empty bucket, which otherwise
+# fails the stack delete with "The bucket you tried to delete is not empty".
+log "Emptying the stack's S3 buckets..."
+for b in $(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
+    --query "StackResources[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" --output text 2>/dev/null); do
+  [ -n "$b" ] && [ "$b" != "None" ] && empty_bucket "$b"
+done
+
 log "CloudFront disable+delete makes this step slow (typically 20-40 minutes)."
 run aws cloudformation delete-stack --stack-name "$STACK_NAME"
 if [ "$DRY_RUN" != "true" ]; then
-  log "Waiting for stack-delete-complete..."
-  if aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" 2>/dev/null; then
+  log "Waiting for stack-delete-complete (status printed every 15s)..."
+  if wait_stack_delete "$STACK_NAME"; then
     ok "Core stack deleted."
   else
     err "Core stack did not reach DELETE_COMPLETE. Check the CloudFormation console for the"
