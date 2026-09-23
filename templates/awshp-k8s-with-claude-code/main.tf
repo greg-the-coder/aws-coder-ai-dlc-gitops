@@ -254,17 +254,21 @@ resource "coder_agent" "dev" {
     ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder" 2>/dev/null || true
 
     # claude-code v5 dropped the dangerously_skip_permissions input, so set bypass
-    # mode at user scope instead (skips the dangerous-mode TOS prompt). We also LOCK
-    # model selection to the gateway-configured default by setting availableModels
-    # to an empty array: this deployment routes through the Coder AI Gateway (Bedrock
-    # provider), which only serves the admin-configured models, so switching to any
-    # other model id would make the gateway reject the request. Writes only
-    # ~/.claude/settings.json (needs no coder CLI), safe to run concurrently with
-    # the claude-code module install.
+    # mode at user scope instead (skips the dangerous-mode TOS prompt). This writes
+    # only ~/.claude/settings.json (needs no coder CLI) and is safe to run
+    # concurrently with the claude-code module install.
+    #
+    # We do NOT set availableModels: in this Claude Code build an empty
+    # availableModels array is an allow-list of NOTHING, so the gateway model
+    # (ANTHROPIC_MODEL=global.anthropic.claude-opus-4-6-v1) is reported as
+    # "restricted by your organization's settings" and Claude Code silently falls
+    # back to its built-in default (which the gateway's Bedrock provider does not
+    # serve, breaking the session). del(.availableModels) also clears any value a
+    # previous template version persisted to the EFS-backed home.
     mkdir -p "$HOME/.claude"
     SETTINGS="$HOME/.claude/settings.json"
     [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-    tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true, "availableModels": [], "permissions": ((.permissions // {}) + {"defaultMode": "bypassPermissions"})}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" || true
+    tmp=$(mktemp) && jq 'del(.availableModels) | . + {"skipDangerousModePermissionPrompt": true, "permissions": ((.permissions // {}) + {"defaultMode": "bypassPermissions"})}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" || true
 
     EOT
 
