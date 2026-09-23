@@ -245,6 +245,27 @@ resource "coder_agent" "dev" {
     startup_script = <<-EOT
     set -e
 
+    # Ensure the `coder` CLI is resolvable for login shells and coder_scripts.
+    # This template pins a fixed agent PATH (coder_env.path), which drops the
+    # agent's own coder bin dir, so symlink coder into $HOME/.local/bin (first
+    # entry of local.bin_path) and $CODER_SCRIPT_BIN_DIR.
+    mkdir -p /home/coder/.local/bin
+    ln -sf /tmp/coder.*/coder /home/coder/.local/bin/coder 2>/dev/null || true
+    ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder" 2>/dev/null || true
+
+    # claude-code v5 dropped the dangerously_skip_permissions input, so set bypass
+    # mode at user scope instead (skips the dangerous-mode TOS prompt). We also LOCK
+    # model selection to the gateway-configured default by setting availableModels
+    # to an empty array: this deployment routes through the Coder AI Gateway (Bedrock
+    # provider), which only serves the admin-configured models, so switching to any
+    # other model id would make the gateway reject the request. Writes only
+    # ~/.claude/settings.json (needs no coder CLI), safe to run concurrently with
+    # the claude-code module install.
+    mkdir -p "$HOME/.claude"
+    SETTINGS="$HOME/.claude/settings.json"
+    [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+    tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true, "availableModels": [], "permissions": ((.permissions // {}) + {"defaultMode": "bypassPermissions"})}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" || true
+
     EOT
 
 }
@@ -374,13 +395,10 @@ resource "coder_script" "kiro_jupyter_extension" {
 module "claude-code" {
     count               = data.coder_workspace.me.start_count
     source              = "registry.coder.com/coder/claude-code/coder"
-    version             = "4.9.0"
+    version             = "5.4.0"
     model               = var.anthropic_model
     agent_id            = coder_agent.dev.id
     workdir             = local.home_dir
-    subdomain           = false
-    report_tasks        = true
-    dangerously_skip_permissions = true
     mcp                 = local.mcp_json
         
     pre_install_script = <<-EOF
@@ -398,21 +416,68 @@ module "claude-code" {
 
     EOF
 
-    post_install_script = <<-EOF
-
-# Bypass the dangerously-skip-permissions TOS prompt
-mkdir -p "$HOME/.claude"
-if [ -f "$HOME/.claude/settings.json" ]; then
-  tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true}' "$HOME/.claude/settings.json" > "$tmp" && mv "$tmp" "$HOME/.claude/settings.json" || true
-else
-  echo '{"skipDangerousModePermissionPrompt": true}' > "$HOME/.claude/settings.json"
-fi
-
-EOF
-
-    order               = 999
 }
 
+
+# Clickable Claude Code launcher. claude-code v5 no longer ships a web app, so
+# provide a terminal launcher tile that opens an interactive Claude Code session.
+# Authentication and model routing come from the agent-wide Coder AI Gateway env
+# (ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / model), so the session is governed and
+# logged by the Coder AI Governance Add-On like every other request.
+resource "coder_app" "claude_code" {
+  agent_id     = coder_agent.dev.id
+  slug         = "claude-code"
+  display_name = "Claude Code"
+  icon         = "/icon/claude.svg"
+  order        = 2
+  open_in      = "slim-window"
+  command      = <<-EOT
+    cd "$HOME"
+    claude --dangerously-skip-permissions
+  EOT
+}
+
+# Pre-approve the current ANTHROPIC_API_KEY so Claude Code never shows its
+# "Detected a custom API key ... Do you want to use this API key?" prompt. The
+# key is the workspace owner's Coder session token (set agent-wide for AI Gateway
+# routing), which ROTATES each start - so this runs on every start. Claude Code
+# records the LAST 20 CHARACTERS of an approved key in
+# customApiKeyResponses.approved in ~/.claude.json (EFS-persisted home), so we
+# wait for the module install to settle that file, then add the current suffix.
+resource "coder_script" "claude_api_key_approve" {
+  count        = data.coder_workspace.me.start_count
+  agent_id     = coder_agent.dev.id
+  display_name = "Claude Code: pre-approve API key"
+  icon         = "/icon/claude.svg"
+  run_on_start = true
+  script       = <<-EOT
+    #!/usr/bin/env bash
+    set -u
+    CFG="$HOME/.claude.json"
+
+    # Wait up to ~120s for the claude-code module install to settle ~/.claude.json.
+    for _ in $(seq 1 60); do
+      if [ -f "$CFG" ] && jq -e '.hasCompletedOnboarding == true' "$CFG" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 2
+    done
+    sleep 5
+    [ -f "$CFG" ] || echo '{}' > "$CFG"
+
+    KEY="$${ANTHROPIC_API_KEY:-}"
+    if [ -n "$KEY" ]; then
+      SUFFIX=$(printf %s "$KEY" | tail -c 20)
+      tmp=$(mktemp)
+      if jq --arg k "$SUFFIX" '.customApiKeyResponses = (.customApiKeyResponses // {"approved": [], "rejected": []}) | .customApiKeyResponses.approved = (((.customApiKeyResponses.approved // []) + [$k]) | unique) | .customApiKeyResponses.rejected = ((.customApiKeyResponses.rejected // []) - [$k])' "$CFG" > "$tmp" 2>/dev/null && mv "$tmp" "$CFG"; then
+        echo "Pre-approved ANTHROPIC_API_KEY in $CFG (Claude Code will not prompt)."
+      else
+        rm -f "$tmp"; echo "Warning: could not pre-approve ANTHROPIC_API_KEY."
+      fi
+    fi
+    exit 0
+  EOT
+}
 
 resource "aws_efs_access_point" "home" {
   file_system_id = var.efs_file_system_id
