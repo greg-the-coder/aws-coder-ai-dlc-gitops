@@ -64,6 +64,7 @@ Parameters:
     Type: String
     Description: Coder Premium Trial License Key
     Default: ""
+    NoEcho: true
 
   CoderGitOpsTemplateRepoURL:
     Type: String
@@ -365,6 +366,22 @@ Resources:
                   - bedrock:InvokeModelWithResponseStream
                   - bedrock:Converse
                   - bedrock:ConverseStream
+                  # Required for the Bedrock native OpenAI-compatible endpoint
+                  # (/openai/v1), which authenticates with the Bedrock API key
+                  # (bearer token) rather than SigV4. Without this the openai-compat
+                  # provider returns 401 access_denied on bedrock:CallWithBearerToken.
+                  - bedrock:CallWithBearerToken
+                Resource: '*'
+              # Marketplace-subscribed models (e.g. the OpenAI GPT models) require the
+              # invoking identity to hold these actions; Bedrock returns 403 otherwise.
+              # NOTE: this only covers the IAM side — the account must ALSO have an
+              # active Bedrock Marketplace agreement for each such model (a one-time
+              # "Model access" subscription in the Bedrock console / create-foundation-
+              # model-agreement). See the deployment prerequisites.
+              - Effect: Allow
+                Action:
+                  - aws-marketplace:ViewSubscriptions
+                  - aws-marketplace:Subscribe
                 Resource: '*'
       Tags:
         - Key: Purpose
@@ -1254,6 +1271,31 @@ Resources:
                         export BEDROCK_MODEL="global.anthropic.claude-opus-4-6-v1"
                         export BEDROCK_SMALL_FAST_MODEL="global.anthropic.claude-haiku-4-5-20251001-v1:0"
                         export BEDROCK_OPENAI_KEY
+
+                        # OpenAI GPT models on Bedrock are AWS Marketplace models and require a
+                        # one-time account-level agreement (subscription) before they can be
+                        # invoked - without it, invocation returns HTTP 403 ("...not authorized
+                        # to perform the required AWS Marketplace actions..."), even for an admin
+                        # identity. Anthropic/xAI models do not need this. Ensure the agreement
+                        # exists for each configured OpenAI model (idempotent; the CodeBuild
+                        # WorkshopCoderRole holds bedrock:* + aws-marketplace:*).
+                        BEDROCK_MARKETPLACE_MODELS="us.openai.gpt-5.6-sol"
+                        for MP_MODEL in $BEDROCK_MARKETPLACE_MODELS; do
+                          OFFER_TOKEN=$(aws bedrock list-foundation-model-agreement-offers \
+                            --model-id "$MP_MODEL" --region "$BEDROCK_REGION" \
+                            --query 'offers[0].offerToken' --output text 2>/dev/null || echo "")
+                          if [ -n "$OFFER_TOKEN" ] && [ "$OFFER_TOKEN" != "None" ]; then
+                            if aws bedrock create-foundation-model-agreement \
+                                 --model-id "$MP_MODEL" --offer-token "$OFFER_TOKEN" \
+                                 --region "$BEDROCK_REGION" >/dev/null 2>&1; then
+                              echo "Bedrock Marketplace agreement ensured for $MP_MODEL"
+                            else
+                              echo "Bedrock Marketplace agreement for $MP_MODEL already present or not required"
+                            fi
+                          else
+                            echo "No Marketplace offer found for $MP_MODEL; skipping (model may not require an agreement)."
+                          fi
+                        done
 
                         ( cd "$CODER_GITOPS_ABS/ai-providers" && bash ai_providers_gitops.sh "$CODER_SESSION_TOKEN" )
                         echo "=== AI Provider + Agents MCP Configuration Complete ==="

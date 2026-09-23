@@ -164,6 +164,15 @@ drive directly from the shell.
 - AWS CLI configured
 - Sufficient quotas for EKS, Aurora PostgreSQL, CloudFront, and VPC resources (NAT Gateways, EIPs)
 - Amazon Bedrock model access enabled in **us-east-1** for the configured Claude (Anthropic), OpenAI, and xAI models
+  - **OpenAI GPT models are AWS Marketplace models** and need a one-time account-level *agreement*
+    (subscription) before they can be invoked; without it, invocation fails with `HTTP 403`
+    ("...not authorized to perform the required AWS Marketplace actions...") even for an admin
+    identity. The deploy now creates this agreement automatically (CodeBuild calls
+    `bedrock:CreateFoundationModelAgreement` for the configured OpenAI models), and the workspace/
+    API-key IAM identities are granted `aws-marketplace:ViewSubscriptions`/`Subscribe`. If you
+    prefer, you can pre-enable it in the **Bedrock console → Model access**. Anthropic and xAI
+    models do not require a Marketplace agreement. To add more OpenAI models later, see
+    [`ai-providers/README.md`](./ai-providers/README.md#adding-another-openai-marketplace-model).
 - A **Coder Premium license** (supplied via the `CoderLicenseKey` parameter) is required for coderd HA (2 replicas) and the Coder Agents MCP-servers API
 - Deploy the [image pipeline stack](#step-1-build-workspace-images-codebuild_image_pipelineyaml) **before** the core stack (see [Deployment](#deployment))
 

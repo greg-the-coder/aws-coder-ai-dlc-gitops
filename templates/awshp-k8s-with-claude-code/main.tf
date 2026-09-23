@@ -152,10 +152,52 @@ data "coder_parameter" "memory" {
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
 
-resource "coder_env" "bedrock_use" {
+# Route BOTH Claude Code and the notebook / agent-framework SDK LLM calls through
+# the **Coder AI Gateway** so every model request is centrally governed and
+# observable by the **Coder AI Governance Add-On** (spend, prompts, and tool calls
+# surface in Coder AI Session logs). We set the standard SDK env vars agent-wide
+# with the workspace owner's Coder session token, giving a single credential that
+# Claude Code, the anthropic / langchain-anthropic SDKs, and the OpenAI SDKs all
+# honor. The gateway forwards to the admin-configured Amazon Bedrock provider
+# (see ai-providers/) using the control plane's centrally-held credentials.
+#
+# We deliberately do NOT set CLAUDE_CODE_USE_BEDROCK: that makes Claude Code call
+# Bedrock directly over SigV4 (workspace IAM role), which bypasses the gateway and
+# produces NO AI Session logs. Routing via ANTHROPIC_BASE_URL below is what enables
+# session logging.
+#
+# IMPORTANT: the AI Gateway routes by PROVIDER NAME, not API type. The path segment
+# `bedrock` / `openai-compat` is the coderd_ai_provider *name* from
+# ai-providers/ai_providers.tf (routes are /api/v2/ai-gateway/<provider-name>/).
+# Anthropic-format requests go to the bedrock provider; OpenAI-format to openai-compat.
+#
+# NOTE: requires Coder v2.32+ with the Coder AI Governance Add-On enabled.
+# LIMITATION: the gateway exposes only OpenAI- and Anthropic-compatible endpoints
+# (no Bedrock SigV4), so boto3 bedrock-runtime / langchain-aws ChatBedrock still
+# call Bedrock directly via the workspace IAM role; use the Anthropic/OpenAI
+# clients to route through the gateway.
+resource "coder_env" "anthropic_base_url" {
   agent_id = coder_agent.dev.id
-  name     = "CLAUDE_CODE_USE_BEDROCK"
-  value    = "1"
+  name     = "ANTHROPIC_BASE_URL"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/bedrock"
+}
+
+resource "coder_env" "anthropic_api_key" {
+  agent_id = coder_agent.dev.id
+  name     = "ANTHROPIC_API_KEY"
+  value    = data.coder_workspace_owner.me.session_token
+}
+
+resource "coder_env" "openai_base_url" {
+  agent_id = coder_agent.dev.id
+  name     = "OPENAI_BASE_URL"
+  value    = "${trimsuffix(data.coder_workspace.me.access_url, "/")}/api/v2/ai-gateway/openai-compat/v1"
+}
+
+resource "coder_env" "openai_api_key" {
+  agent_id = coder_agent.dev.id
+  name     = "OPENAI_API_KEY"
+  value    = data.coder_workspace_owner.me.session_token
 }
 
 resource "coder_env" "path" {
@@ -202,6 +244,31 @@ resource "coder_agent" "dev" {
     }
     startup_script = <<-EOT
     set -e
+
+    # Ensure the `coder` CLI is resolvable for login shells and coder_scripts.
+    # This template pins a fixed agent PATH (coder_env.path), which drops the
+    # agent's own coder bin dir, so symlink coder into $HOME/.local/bin (first
+    # entry of local.bin_path) and $CODER_SCRIPT_BIN_DIR.
+    mkdir -p /home/coder/.local/bin
+    ln -sf /tmp/coder.*/coder /home/coder/.local/bin/coder 2>/dev/null || true
+    ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder" 2>/dev/null || true
+
+    # claude-code v5 dropped the dangerously_skip_permissions input, so set bypass
+    # mode at user scope instead (skips the dangerous-mode TOS prompt). This writes
+    # only ~/.claude/settings.json (needs no coder CLI) and is safe to run
+    # concurrently with the claude-code module install.
+    #
+    # We do NOT set availableModels: in this Claude Code build an empty
+    # availableModels array is an allow-list of NOTHING, so the gateway model
+    # (ANTHROPIC_MODEL=global.anthropic.claude-opus-4-6-v1) is reported as
+    # "restricted by your organization's settings" and Claude Code silently falls
+    # back to its built-in default (which the gateway's Bedrock provider does not
+    # serve, breaking the session). del(.availableModels) also clears any value a
+    # previous template version persisted to the EFS-backed home.
+    mkdir -p "$HOME/.claude"
+    SETTINGS="$HOME/.claude/settings.json"
+    [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+    tmp=$(mktemp) && jq 'del(.availableModels) | . + {"skipDangerousModePermissionPrompt": true, "permissions": ((.permissions // {}) + {"defaultMode": "bypassPermissions"})}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS" || true
 
     EOT
 
@@ -273,72 +340,25 @@ module "code-server" {
     extensions = ["ms-toolsai.jupyter"]
 }
 
-module "kiro" {
-    source   = "registry.coder.com/coder/kiro/coder"
-    version  = "1.1.0"
+module "vscode" {
+    count    = data.coder_workspace.me.start_count
+    source   = "registry.coder.com/coder/vscode-desktop/coder"
+    version  = "1.3.0"
     agent_id = coder_agent.dev.id
-    order = 1
-}
-
-# Auto-install the Jupyter extension for the Kiro IDE.
-# Kiro connects as a desktop client and downloads its remote server on first
-# connect, so we install into the (EFS-persistent) Kiro server extensions dir:
-# immediately if the server is already present, otherwise via a one-time
-# background poller. Dependencies resolve automatically from Open VSX.
-resource "coder_script" "kiro_jupyter_extension" {
-    agent_id           = coder_agent.dev.id
-    display_name       = "Kiro: install Jupyter extension"
-    icon               = "/icon/kiro.svg"
-    run_on_start       = true
-    start_blocks_login = false
-    script             = <<-EOT
-    #!/bin/sh
-    set -eu
-    EXT_ID="ms-toolsai.jupyter"
-    KIRO_BIN="$HOME/.kiro-server/bin"
-    SENTINEL="$HOME/.kiro-server/.jupyter-ext-installed"
-
-    if [ -f "$SENTINEL" ]; then
-      echo "Kiro: $EXT_ID already provisioned."
-      exit 0
-    fi
-
-    install_ext() {
-      SRV=$(find "$KIRO_BIN" -maxdepth 3 -type f -name kiro-server 2>/dev/null | head -1)
-      [ -n "$SRV" ] || return 1
-      "$SRV" --install-extension "$EXT_ID" && touch "$SENTINEL"
-    }
-
-    if install_ext; then
-      echo "Kiro: installed $EXT_ID."
-    else
-      # Server not downloaded yet (first connect pending) - poll in background.
-      (
-        i=0
-        while [ "$i" -lt 120 ]; do
-          sleep 30
-          if install_ext; then
-            echo "Kiro: installed $EXT_ID after connect."
-            break
-          fi
-          i=$((i + 1))
-        done
-      ) >/tmp/kiro-jupyter-install.log 2>&1 &
-      echo "Kiro: will install $EXT_ID on first connect (background)."
-    fi
-    EOT
+    folder   = local.home_dir
+    order    = 1
+    # Pre-install the Jupyter extension on the workspace host so the desktop VS
+    # Code (Coder Remote) session has it available (parity with the old Kiro IDE).
+    extensions = ["ms-toolsai.jupyter"]
 }
 
 module "claude-code" {
     count               = data.coder_workspace.me.start_count
     source              = "registry.coder.com/coder/claude-code/coder"
-    version             = "4.9.0"
+    version             = "5.4.0"
     model               = var.anthropic_model
     agent_id            = coder_agent.dev.id
     workdir             = local.home_dir
-    subdomain           = false
-    report_tasks        = true
-    dangerously_skip_permissions = true
     mcp                 = local.mcp_json
         
     pre_install_script = <<-EOF
@@ -356,21 +376,72 @@ module "claude-code" {
 
     EOF
 
-    post_install_script = <<-EOF
-
-# Bypass the dangerously-skip-permissions TOS prompt
-mkdir -p "$HOME/.claude"
-if [ -f "$HOME/.claude/settings.json" ]; then
-  tmp=$(mktemp) && jq '. + {"skipDangerousModePermissionPrompt": true}' "$HOME/.claude/settings.json" > "$tmp" && mv "$tmp" "$HOME/.claude/settings.json" || true
-else
-  echo '{"skipDangerousModePermissionPrompt": true}' > "$HOME/.claude/settings.json"
-fi
-
-EOF
-
-    order               = 999
 }
 
+
+# Clickable Claude Code launcher. claude-code v5 no longer ships a web app, so
+# provide a terminal launcher tile that opens an interactive Claude Code session.
+# Authentication and model routing come from the agent-wide Coder AI Gateway env
+# (ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / model), so the session is governed and
+# logged by the Coder AI Governance Add-On like every other request.
+resource "coder_app" "claude_code" {
+  agent_id     = coder_agent.dev.id
+  slug         = "claude-code"
+  display_name = "Claude Code"
+  icon         = "/icon/claude.svg"
+  order        = 2
+  # NOTE: this is a command (terminal) app, opened in a slim window - it is never
+  # served over an app subdomain, so subdomain must NOT be set here (the coder
+  # provider rejects `subdomain` together with `command`). The workshop's
+  # no-wildcard-subdomain requirement is therefore satisfied inherently.
+  open_in      = "slim-window"
+  command      = <<-EOT
+    cd "$HOME"
+    claude --dangerously-skip-permissions
+  EOT
+}
+
+# Pre-approve the current ANTHROPIC_API_KEY so Claude Code never shows its
+# "Detected a custom API key ... Do you want to use this API key?" prompt. The
+# key is the workspace owner's Coder session token (set agent-wide for AI Gateway
+# routing), which ROTATES each start - so this runs on every start. Claude Code
+# records the LAST 20 CHARACTERS of an approved key in
+# customApiKeyResponses.approved in ~/.claude.json (EFS-persisted home), so we
+# wait for the module install to settle that file, then add the current suffix.
+resource "coder_script" "claude_api_key_approve" {
+  count        = data.coder_workspace.me.start_count
+  agent_id     = coder_agent.dev.id
+  display_name = "Claude Code: pre-approve API key"
+  icon         = "/icon/claude.svg"
+  run_on_start = true
+  script       = <<-EOT
+    #!/usr/bin/env bash
+    set -u
+    CFG="$HOME/.claude.json"
+
+    # Wait up to ~120s for the claude-code module install to settle ~/.claude.json.
+    for _ in $(seq 1 60); do
+      if [ -f "$CFG" ] && jq -e '.hasCompletedOnboarding == true' "$CFG" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 2
+    done
+    sleep 5
+    [ -f "$CFG" ] || echo '{}' > "$CFG"
+
+    KEY="$${ANTHROPIC_API_KEY:-}"
+    if [ -n "$KEY" ]; then
+      SUFFIX=$(printf %s "$KEY" | tail -c 20)
+      tmp=$(mktemp)
+      if jq --arg k "$SUFFIX" '.customApiKeyResponses = (.customApiKeyResponses // {"approved": [], "rejected": []}) | .customApiKeyResponses.approved = (((.customApiKeyResponses.approved // []) + [$k]) | unique) | .customApiKeyResponses.rejected = ((.customApiKeyResponses.rejected // []) - [$k])' "$CFG" > "$tmp" 2>/dev/null && mv "$tmp" "$CFG"; then
+        echo "Pre-approved ANTHROPIC_API_KEY in $CFG (Claude Code will not prompt)."
+      else
+        rm -f "$tmp"; echo "Warning: could not pre-approve ANTHROPIC_API_KEY."
+      fi
+    fi
+    exit 0
+  EOT
+}
 
 resource "aws_efs_access_point" "home" {
   file_system_id = var.efs_file_system_id

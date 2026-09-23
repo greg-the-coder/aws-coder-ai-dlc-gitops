@@ -206,12 +206,6 @@ resource "coder_agent" "dev" {
     # sync`) and interactive shells.
     ln -sf /tmp/coder.*/coder "$HOME/.local/bin/coder" 2>/dev/null || true
     ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder" 2>/dev/null || true
-
-    # Trust the home folder in code-server (open without prompts).
-    mkdir -p $HOME/.local/share/code-server/User
-    cat > $HOME/.local/share/code-server/User/settings.json <<'SETTINGS_EOF'
-{ "security.workspace.trust.enabled": false }
-SETTINGS_EOF
     EOT
 
 }
@@ -272,13 +266,33 @@ resource "coder_script" "agent_python_kernel" {
     EOT
 }
 
-module "code-server" {
-  source     = "registry.coder.com/coder/code-server/coder"
-  version    = "1.5.2"
+# Browser-based VS Code (official VS Code Server / "vscode-web"), replacing
+# code-server. Served on a path (subdomain = false) since this workshop
+# deployment does not use wildcard app subdomains; workspace trust disabled so
+# the home folder opens without prompts.
+module "vscode-web" {
+  count          = data.coder_workspace.me.start_count
+  source         = "registry.coder.com/coder/vscode-web/coder"
+  version        = "1.6.2"
+  agent_id       = coder_agent.dev.id
+  folder         = local.home_dir
+  accept_license = true
+  subdomain      = false
+  disable_trust  = true
+  order          = 0
+  extensions     = ["ms-toolsai.jupyter"]
+}
+
+# VS Code Desktop (Coder Remote) as an additional IDE option: a one-click button
+# that opens the workspace in the user's local VS Code over SSH. Pre-installs the
+# Jupyter extension on the workspace host.
+module "vscode" {
+  count      = data.coder_workspace.me.start_count
+  source     = "registry.coder.com/coder/vscode-desktop/coder"
+  version    = "1.3.0"
   agent_id   = coder_agent.dev.id
   folder     = local.home_dir
-  subdomain  = false
-  order      = 0
+  order      = 1
   extensions = ["ms-toolsai.jupyter"]
 }
 
