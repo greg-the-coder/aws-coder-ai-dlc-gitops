@@ -146,17 +146,19 @@ provider (see [GitOps Workflow](#gitops-workflow)). Each template's `description
 | Template | Display Name | Best for |
 |----------|--------------|----------|
 | `awshp-k8s-challenge-agent` | AWS Workshop - AI Agent Development | Build & deploy AI agents to AWS. Pre-loaded agent frameworks (Strands, LangGraph, LangChain, LlamaIndex, Lyzr), AWS CDK/CLI + Bedrock. Optimized for Coder Agents. |
-| `awshp-k8s-base-claudecode` | AWS Workshop — Kubernetes with Claude Code | Claude Code AI assistant with task automation. |
-| `awshp-k8s-base-codex` | AWS Workshop — Kubernetes with OpenAI Codex | OpenAI Codex CLI (GPT-5.6 Sol via the Coder AI Gateway) for interactive development. |
-| `awshp-k8s-base-kirocli` | AWS Workshop — Kubernetes with Kiro CLI | Kiro CLI AI assistant for interactive development. |
+| `awshp-k8s-base-claudecode` | AWS Workshop — Kubernetes with Claude Code | Claude Code routed through the Coder AI Gateway (session-logged); code-server + VS Code Desktop. |
+| `awshp-k8s-base-codex` | AWS Workshop — Kubernetes with OpenAI Codex | OpenAI Codex CLI (GPT-5.6 Sol via the Coder AI Gateway); VS Code Web + VS Code Desktop. |
+| `awshp-k8s-base-kirocli` | AWS Workshop — Kubernetes with Kiro CLI | Kiro CLI AI assistant + Kiro IDE for interactive development. |
 
 All templates run on Fargate with EFS-backed persistent home directories.
 
-The **Claude Code**, **Codex**, and **Kiro CLI** templates ship a citizen-builder set of
-[AWS Labs MCP servers](https://github.com/awslabs/mcp) preconfigured for their assistants
-— IaC (CloudFormation + CDK), pricing, Serverless, and CloudWatch — running on demand via
-`uvx`. General AWS API access is provided by the AWS CLI (v2) and boto3, which the agents
-drive directly from the shell.
+The **Codex** template ships a citizen-builder set of
+[AWS Labs MCP servers](https://github.com/awslabs/mcp) — IaC (CloudFormation + CDK),
+pricing, Serverless, and CloudWatch — run on demand via `uvx`. The **Claude Code** and
+**Kiro CLI** templates ship observability / LLM-tooling MCP servers (Fiddler GenAI,
+LangSmith, LlamaCloud), each enabled only when its API key is provided. General AWS API
+access is provided by the AWS CLI (v2) and boto3, which the agents drive directly from the
+shell.
 
 ## Prerequisites
 
