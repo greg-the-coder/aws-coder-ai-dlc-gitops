@@ -285,18 +285,41 @@ fi
 
 # ============================================================================= 3. Aurora (RETAINED)
 phase "3/8  Aurora PostgreSQL (retained by the stack; must go before stack delete)"
-if aws rds describe-db-instances --db-instance-identifier "$AURORA_INSTANCE_ID" >/dev/null 2>&1; then
-  run aws rds delete-db-instance --db-instance-identifier "$AURORA_INSTANCE_ID" --skip-final-snapshot --delete-automated-backups
-  [ "$DRY_RUN" = "true" ] || { log "Waiting for DB instance deletion (status printed every 15s)..."; wait_rds instance "$AURORA_INSTANCE_ID"; }
+
+# INSTANCE first - a cluster with member instances cannot be deleted. Probe the
+# actual status (not just presence) so a re-run is clean: skip if already gone,
+# don't re-issue delete if it's already 'deleting' (that errors with
+# InvalidDBInstanceState), and surface any delete error instead of hiding it.
+inst_status=$(aws rds describe-db-instances --db-instance-identifier "$AURORA_INSTANCE_ID" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "")
+if [ -z "$inst_status" ] || [ "$inst_status" = "None" ]; then
+  log "Aurora instance '$AURORA_INSTANCE_ID' not present; skipping."
+elif [ "$DRY_RUN" = "true" ]; then
+  printf '  %s[dry-run]%s delete-db-instance %s (status=%s)\n' "$c_yel" "$c_off" "$AURORA_INSTANCE_ID" "$inst_status"
 else
-  log "Aurora instance '$AURORA_INSTANCE_ID' not found; skipping."
+  if [ "$inst_status" = "deleting" ]; then
+    log "Aurora instance '$AURORA_INSTANCE_ID' already deleting; waiting."
+  else
+    run aws rds delete-db-instance --db-instance-identifier "$AURORA_INSTANCE_ID" --skip-final-snapshot --delete-automated-backups \
+      || warn "delete-db-instance returned an error (status was '$inst_status'); waiting for the current state to resolve."
+  fi
+  wait_rds instance "$AURORA_INSTANCE_ID"
 fi
-if aws rds describe-db-clusters --db-cluster-identifier "$AURORA_CLUSTER_ID" >/dev/null 2>&1; then
-  run aws rds delete-db-cluster --db-cluster-identifier "$AURORA_CLUSTER_ID" --skip-final-snapshot
-  [ "$DRY_RUN" = "true" ] || { log "Waiting for DB cluster deletion (status printed every 15s)..."; wait_rds cluster "$AURORA_CLUSTER_ID"; }
-  ok "Aurora deleted."
+
+# CLUSTER (only after the instance is fully gone, above).
+clu_status=$(aws rds describe-db-clusters --db-cluster-identifier "$AURORA_CLUSTER_ID" --query 'DBClusters[0].Status' --output text 2>/dev/null || echo "")
+if [ -z "$clu_status" ] || [ "$clu_status" = "None" ]; then
+  log "Aurora cluster '$AURORA_CLUSTER_ID' not present; skipping."
+elif [ "$DRY_RUN" = "true" ]; then
+  printf '  %s[dry-run]%s delete-db-cluster %s (status=%s)\n' "$c_yel" "$c_off" "$AURORA_CLUSTER_ID" "$clu_status"
 else
-  log "Aurora cluster '$AURORA_CLUSTER_ID' not found; skipping."
+  if [ "$clu_status" = "deleting" ]; then
+    log "Aurora cluster '$AURORA_CLUSTER_ID' already deleting; waiting."
+  else
+    run aws rds delete-db-cluster --db-cluster-identifier "$AURORA_CLUSTER_ID" --skip-final-snapshot \
+      || warn "delete-db-cluster returned an error (status was '$clu_status'); waiting for the current state to resolve."
+  fi
+  wait_rds cluster "$AURORA_CLUSTER_ID"
+  ok "Aurora deleted."
 fi
 
 # ============================================================================= 4. EFS (RETAINED)
