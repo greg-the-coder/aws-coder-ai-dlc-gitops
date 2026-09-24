@@ -97,6 +97,18 @@ empty_bucket() {
   done
 }
 
+# empty_stack_buckets: empty every AWS::S3::Bucket still owned by the stack
+# (CloudFront + NLB access-log buckets). CloudFormation cannot delete a
+# non-empty bucket, so this must run before (and, for CloudFront logs, again
+# during) the core-stack delete.
+empty_stack_buckets() {
+  local stack="$1" b
+  for b in $(aws cloudformation describe-stack-resources --stack-name "$stack" \
+      --query "StackResources[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" --output text 2>/dev/null); do
+    [ -n "$b" ] && [ "$b" != "None" ] && empty_bucket "$b"
+  done
+}
+
 # wait_rds: poll an RDS instance/cluster until it is gone, printing a status
 # line every 15s. `aws rds wait ...` blocks SILENTLY for many minutes, which
 # trips AWS CloudShell's inactivity timeout; the periodic output keeps the
@@ -410,22 +422,38 @@ phase "8/8  Core CloudFormation stack '$STACK_NAME' (VPC, CloudFront, NAT/EIP, K
 # buckets) - CloudFormation cannot delete a non-empty bucket, which otherwise
 # fails the stack delete with "The bucket you tried to delete is not empty".
 log "Emptying the stack's S3 buckets..."
-for b in $(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
-    --query "StackResources[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" --output text 2>/dev/null); do
-  [ -n "$b" ] && [ "$b" != "None" ] && empty_bucket "$b"
-done
+empty_stack_buckets "$STACK_NAME"
 
 log "CloudFront disable+delete makes this step slow (typically 20-40 minutes)."
 run aws cloudformation delete-stack --stack-name "$STACK_NAME"
 if [ "$DRY_RUN" != "true" ]; then
   log "Waiting for stack-delete-complete (status printed every 15s)..."
-  if wait_stack_delete "$STACK_NAME"; then
-    ok "Core stack deleted."
-  else
-    err "Core stack did not reach DELETE_COMPLETE. Check the CloudFormation console for the"
-    err "resource that blocked deletion (commonly a leftover ENI/security group from the NLB"
-    err "or EKS). Resolve it and re-run: aws cloudformation delete-stack --stack-name $STACK_NAME"
-  fi
+  # CloudFront keeps delivering access logs while its distribution is being
+  # disabled/deleted, so the CloudFrontLoggingBucket is commonly RE-POPULATED
+  # after our initial empty; the stack delete then fails with "The bucket you
+  # tried to delete is not empty" (S3 409). Once the distribution is gone no
+  # new logs arrive, so on failure re-empty the stack's remaining buckets and
+  # retry delete-stack - CloudFormation resumes from the buckets it could not
+  # delete and completes cleanly.
+  attempt=1; max_attempts=4
+  while :; do
+    if wait_stack_delete "$STACK_NAME"; then
+      ok "Core stack deleted."
+      break
+    fi
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      err "Core stack did not reach DELETE_COMPLETE after ${attempt} attempts. Check the"
+      err "CloudFormation console for the resource that blocked deletion (commonly a leftover"
+      err "ENI/security group from the NLB or EKS). Resolve it and re-run:"
+      err "  aws cloudformation delete-stack --stack-name $STACK_NAME"
+      break
+    fi
+    warn "Stack delete failed (attempt ${attempt}/${max_attempts}); re-emptying its S3 buckets"
+    warn "(CloudFront may have re-populated the logging bucket) and retrying delete-stack..."
+    empty_stack_buckets "$STACK_NAME"
+    run aws cloudformation delete-stack --stack-name "$STACK_NAME"
+    attempt=$(( attempt + 1 ))
+  done
 fi
 
 # ----------------------------------------------------------------------------- optional secret purge
