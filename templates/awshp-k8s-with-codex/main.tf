@@ -90,8 +90,11 @@ locals {
   # AWS MCP servers for Codex (native TOML [mcp_servers.*], appended to
   # config.toml by the module). A citizen-builder toolkit of AWS Labs MCP servers
   # matching the Claude Code / Kiro templates (awslabs iac/pricing/serverless/
-  # cloudwatch), run on demand via uvx from the pre-warmed on-image cache
-  # (/opt/uv-cache). Calls use the workspace IRSA role (Codex forwards the pod env
+  # cloudwatch), run on demand via uvx. The uv download/build cache lives under
+  # $HOME/.cache/uv (UV_CACHE_DIR): writable by uid 1000 and persisted on EFS, so
+  # the first cold `uvx` fetch (which can take ~1-2 min) is cached across restarts.
+  # startup_timeout_sec is raised to 180 because Codex's 10s default is too short
+  # for that first cold start. Calls use the workspace IRSA role (Codex forwards the pod env
   # to the stdio servers, so AWS_ROLE_ARN / web-identity token are inherited);
   # AWS_REGION pins the operation region (local.aws_region, derived from the ECR
   # image URI). KEEP VERSIONS IN SYNC with images/coder-workspace-base/Dockerfile.
@@ -107,22 +110,26 @@ locals {
     [mcp_servers.awslabs-aws-iac-mcp-server]
     command = "uvx"
     args = ["awslabs.aws-iac-mcp-server==1.0.25"]
-    env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
+    env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "${local.home_dir}/.cache/uv" }
+    startup_timeout_sec = 180
 
     [mcp_servers.awslabs-aws-pricing-mcp-server]
     command = "uvx"
     args = ["awslabs.aws-pricing-mcp-server==1.1.0"]
-    env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
+    env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "${local.home_dir}/.cache/uv" }
+    startup_timeout_sec = 180
 
     [mcp_servers.awslabs-aws-serverless-mcp-server]
     command = "uvx"
     args = ["awslabs.aws-serverless-mcp-server==0.2.0"]
-    env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
+    env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "${local.home_dir}/.cache/uv" }
+    startup_timeout_sec = 180
 
     [mcp_servers.awslabs-cloudwatch-mcp-server]
     command = "uvx"
     args = ["awslabs.cloudwatch-mcp-server==0.2.0"]
-    env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "/opt/uv-cache" }
+    env = { FASTMCP_LOG_LEVEL = "ERROR", AWS_REGION = "${local.aws_region}", AWS_DEFAULT_REGION = "${local.aws_region}", AWS_STS_REGIONAL_ENDPOINTS = "regional", UV_CACHE_DIR = "${local.home_dir}/.cache/uv" }
+    startup_timeout_sec = 180
   TOML
 }
 
