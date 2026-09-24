@@ -193,6 +193,7 @@ BEDROCK_SECRET_ARN=$(get_output BedrockOpenAIApiKeySecretArn)
 AURORA_CLUSTER_ID="${CLUSTER_NAME}-aurora"
 AURORA_INSTANCE_ID="${CLUSTER_NAME}-aurora-instance"
 ECR_REPOS=(
+  "${CLUSTER_NAME}/coder-workspace-base"
   "${CLUSTER_NAME}/coder-workspace-claude-code"
   "${CLUSTER_NAME}/coder-workspace-kiro-cli"
   "${CLUSTER_NAME}/coder-workspace-challenge"
