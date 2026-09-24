@@ -33,7 +33,10 @@ Gateway.
   [AWS Labs MCP servers](https://github.com/awslabs/mcp) as the Claude Code template is
   configured for Codex (native `[mcp_servers.*]` TOML) and run on demand via `uvx`:
   **IaC** (CloudFormation + CDK), **pricing**, **Serverless**, and **CloudWatch** —
-  covering the design → cost → build/deploy → operate lifecycle. Calls use the workspace
+  covering the design → cost → build/deploy → operate lifecycle. The `uvx` download
+  cache is kept in `$HOME/.cache/uv`, which is on the persistent EFS volume, so each
+  server's first cold fetch (~1-2 min) is cached across restarts; `startup_timeout_sec`
+  is raised to `180` so that first start does not time out. Calls use the workspace
   IAM role (IRSA); Codex forwards the pod environment to the stdio MCP servers, so the
   `<cluster>-workshop-user` role/token are inherited automatically (no runtime credential
   injection needed).
@@ -84,7 +87,8 @@ llm = ChatOpenAI(model="us.openai.gpt-5.6-sol")   # or "us.xai.grok-4.6"
 - **Storage:** Amazon EFS access point mounted at `/home/coder` (`ReadWriteMany`, persistent)
 - **Image:** reuses the Claude Code workspace image
   ([`images/coder-workspace-claude-code/Dockerfile`](../../images/coder-workspace-claude-code/Dockerfile)),
-  which already ships Node.js/npm/uv and the pre-warmed uv cache Codex + the MCP servers need.
+  which already ships Node.js/npm/uv; the AWS Labs MCP servers are fetched on first use
+  via `uvx` and cached on the persistent EFS volume (`$HOME/.cache/uv`).
 
 ## Parameters
 
