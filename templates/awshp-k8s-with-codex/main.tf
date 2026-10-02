@@ -67,8 +67,13 @@ locals {
   #     tools directly to the model instead of hiding them behind a tool-search
   #     step (which the model otherwise does not invoke, reporting tools
   #     "unavailable").
+  #   * features.daemon_auto_start = false: the workspace runs on Fargate without
+  #     a persistent background daemon; Codex >= 0.160.0 defaults to launching a
+  #     shared app-server daemon on interactive start, which errors with "this CLI
+  #     has no complete local package" when the full standalone package layout is
+  #     not present. Disabling daemon_auto_start makes `codex` run in ephemeral
+  #     (no-daemon) mode by default, equivalent to `codex --no-daemon`.
   codex_base_config = <<-TOML
-    preferred_auth_method = "apikey"
     model_provider        = "openai-compat"
     model                 = "us.openai.gpt-5.6-sol"
     web_search            = "disabled"
@@ -76,6 +81,7 @@ locals {
 
     [features]
     tool_search_always_defer_mcp_tools = false
+    daemon_auto_start = false
 
     [model_providers.openai-compat]
     name     = "Coder AI Gateway (Bedrock)"
@@ -213,6 +219,36 @@ resource "coder_agent" "dev" {
     # sync`) and interactive shells.
     ln -sf /tmp/coder.*/coder "$HOME/.local/bin/coder" 2>/dev/null || true
     ln -sf /tmp/coder.*/coder "$CODER_SCRIPT_BIN_DIR/coder" 2>/dev/null || true
+
+    # Ensure Codex is installed as a full standalone package (not just a bare
+    # binary). Codex >= 0.160.0 requires the standalone package layout at
+    # ~/.codex/packages/standalone/ (which includes bin/codex, codex-path/rg,
+    # codex-code-mode-host, etc.) for interactive mode. The Coder module's
+    # install script pipes the official installer through `sh`, which should
+    # create this structure — but when the installer's primary source
+    # (releases.openai.com) is unreachable it falls back to GitHub Releases
+    # whose tar.gz is a legacy bare-binary format, producing an incomplete
+    # install that errors: "this CLI has no complete local package".
+    #
+    # Additionally, persistent EFS home dirs may retain a stale bare binary
+    # from a previous template version. This check detects both cases and
+    # re-runs the official installer to get the full package.
+    CODEX_BIN="$HOME/.local/bin/codex"
+    CODEX_PKG="$HOME/.codex/packages/standalone/current"
+    if [ -x "$CODEX_BIN" ] && [ ! -d "$CODEX_PKG" ]; then
+      echo "Codex binary exists but standalone package is missing; reinstalling..." >&2
+      rm -f "$CODEX_BIN"
+      curl -fsSL https://chatgpt.com/codex/install.sh \
+        | CODEX_RELEASE="0.160.0" CODEX_NON_INTERACTIVE=1 sh || true
+      # Re-link into CODER_SCRIPT_BIN_DIR so the agent PATH entry works
+      [ -x "$CODEX_BIN" ] && ln -sf "$CODEX_BIN" "$CODER_SCRIPT_BIN_DIR/codex" 2>/dev/null || true
+    fi
+
+    # Clean up stale Codex arg0 temp dirs that accumulate on EFS (NFS-backed)
+    # because the filesystem holds open handles, preventing Codex's built-in
+    # cleanup from succeeding.
+    find "$HOME/.codex/tmp/arg0/" -mindepth 1 -maxdepth 1 -type d -mmin +60 \
+      -exec rm -rf {} + 2>/dev/null || true
     EOT
 
 }
@@ -304,11 +340,15 @@ module "vscode" {
 }
 
 module "codex" {
-  source           = "registry.coder.com/coder-labs/codex/coder"
-  version          = "5.3.2"
-  agent_id         = coder_agent.dev.id
-  workdir          = local.home_dir
-  install_codex    = true
+  source        = "registry.coder.com/coder-labs/codex/coder"
+  version       = "5.3.2"
+  agent_id      = coder_agent.dev.id
+  workdir       = local.home_dir
+  install_codex = true
+
+  # Keep the installed binary aligned with local.codex_base_config. This was
+  # verified with a gateway request and the native AWS MCP configuration.
+  codex_version    = "0.160.0"
   base_config_toml = local.codex_base_config
   mcp              = local.codex_mcp_toml
 }
