@@ -41,7 +41,8 @@ if need_tf; then
   mkdir -p /tmp/tfbin && unzip -q -o /tmp/tf.zip -d /tmp/tfbin
   export PATH="/tmp/tfbin:$PATH"
 fi
-terraform version | head -1
+
+terraform version | sed -n 1p
 
 # --- Map environment -> TF_VAR_* ---------------------------------------------
 export TF_VAR_coder_url="${CODER_AGENT_URL}"
